@@ -130,7 +130,7 @@ use nanos_sdk::io;
 use arrayvec::ArrayVec;
 use core::future::Future;
 use nanos_sdk::bindings::*;
-use ledger_parser_combinators::async_parser::{Readable, reject};
+use ledger_parser_combinators::async_parser::{Readable, UnwrappableReadable, reject};
 
 use nanos_sdk::io::Reply;
 use core::convert::TryFrom;
@@ -191,6 +191,21 @@ impl core::fmt::Debug for HostIOState {
     }
 }
 
+#[derive(PartialEq,Debug)]
+pub enum AsyncTrampolineResult {
+    NothingPending,
+    Pending,
+    Resolved
+}
+
+pub trait AsyncTrampoline {
+    fn handle_command(&mut self) -> AsyncTrampolineResult;
+}
+impl AsyncTrampoline for () {
+    fn handle_command(&mut self) -> AsyncTrampolineResult { AsyncTrampolineResult::NothingPending }
+}
+
+
 #[derive(Copy, Clone, Debug)]
 pub struct HostIO(pub &'static RefCell<HostIOState>);
 
@@ -215,7 +230,10 @@ impl HostIO {
                                     Poll::Ready(Ok(Ref::map(s.comm.borrow(), |comm| &comm.get_data().ok().unwrap()[1..])))
                                 }
                                 Ok(HostToLedgerCmd::GetChunkResponseFailure) => Poll::Ready(Err(ChunkNotFound)),
-                                _ => panic!("Unreachable: should be filtered out by protocol rules before this point."),
+                                _ => {
+                                    error!("Reached unreachable");
+                                    panic!("Unreachable: should be filtered out by protocol rules before this point.")
+                                }
                             }
                         } else {
                             s.requested_block = Some(sha);
@@ -301,10 +319,18 @@ impl Readable for ByteStream {
                 self.current_offset += consuming;
                 if self.current_offset + HASH_LEN == chunk.len() {
                     self.current_chunk = chunk[0..HASH_LEN].try_into().unwrap();
+                    self.current_offset = 0;
                 }
             }
             buffer.into_inner().unwrap()
         }
+    }
+}
+
+impl UnwrappableReadable for ByteStream {
+    type Wrapped = Self;
+    fn unwrap_clone(&self) -> Self::Wrapped {
+        self.clone()
     }
 }
 
@@ -350,9 +376,10 @@ pub static RAW_WAKER_VTABLE : RawWakerVTable = RawWakerVTable::new(|a| RawWaker:
 
 /// Main entry point: run an AsyncAPDU given an input.
 #[inline(never)]
-pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 'a + AsyncAPDUStated<StateHolderT> + Copy>     (
+pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 'a + AsyncAPDUStated<StateHolderT> + Copy, T: AsyncTrampoline>     (
     s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>,
     io: HostIO,
+    trampoline: &mut T,
     apdu: A
 ) -> Result<(), Reply> where [(); MAX_PARAMS]: Sized {
     let command = io.get_comm()?.get_data()?[0].try_into();
@@ -393,29 +420,38 @@ pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 
         // Reject otherwise.
         _ => Err(io::StatusWords::Unknown)?,
     }
+
     
     // We use this to wait if we've already got a command to send, so clear it now that we're
     // in a validated state.
     io.0.borrow_mut().sent_command=None;
 
-    // And run the future for this APDU.
-    match apdu.poll(s) {
-        Poll::Pending => {
-            // Check that if we're waiting that we've actually given the host something to do.
-            if io.0.borrow().sent_command.is_some() {
-                Ok(())
-            } else {
-                error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
-                Err(io::StatusWords::Unknown)?
+    loop {
+        // And run the future for this APDU.
+        match apdu.poll(s) {
+            Poll::Pending => {
+                let mut trampoline_res = AsyncTrampolineResult::Pending;
+                // First, clear any trampolines we might have pending
+                while trampoline_res == AsyncTrampolineResult::Pending {
+                    trampoline_res = trampoline.handle_command();
+                }
+                // Then, check that if we're waiting that we've actually given the host something to do.
+                if io.0.borrow().sent_command.is_some() {
+                    return Ok(())
+                } else if trampoline_res == AsyncTrampolineResult::Resolved {
+                } else {
+                    error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
+                    Err(io::StatusWords::Unknown)?
+                }
             }
-        }
-        Poll::Ready(()) => {
-            if io.0.borrow().sent_command.is_none() {
-                error!("APDU handler future completed but did not send a command; the last line is probably missing an .await");
-                Err(io::StatusWords::Unknown)?
+            Poll::Ready(()) => {
+                if io.0.borrow().sent_command.is_none() {
+                    error!("APDU handler future completed but did not send a command; the last line is probably missing an .await");
+                    Err(io::StatusWords::Unknown)?
+                }
+                s.set(core::default::Default::default());
+                return Ok(())
             }
-            s.set(core::default::Default::default());
-            Ok(())
         }
     }
 }
