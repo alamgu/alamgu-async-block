@@ -118,11 +118,10 @@
 //!
 #![no_std]
 #![allow(incomplete_features)]
-#![feature(const_generics)]
-#![feature(const_evaluatable_checked)]
+#![feature(adt_const_params)]
+#![feature(generic_const_exprs)]
 #![feature(generic_associated_types)]
-#![feature(min_type_alias_impl_trait)]
-#![feature(impl_trait_in_bindings)]
+#![feature(type_alias_impl_trait)]
 #![feature(future_poll_fn)]
 
 use ledger_log::*;
