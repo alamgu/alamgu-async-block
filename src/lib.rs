@@ -252,7 +252,7 @@ impl HostIO {
         })
     }
 
-    fn send_write_command<'a: 'c, 'b: 'c, 'c>(self, cmd: LedgerToHostCmd, data: &'b [u8]) -> impl 'c + Future<Output = ()> {
+    fn send_write_command<'a: 'c, 'b: 'c, 'c>(self, cmd: LedgerToHostCmd, data: &'b [u8], wait: bool) -> impl 'c + Future<Output = ()> {
         core::future::poll_fn(move |_| {
             match self.0.try_borrow_mut() {
                 Ok(ref mut s) => {
@@ -264,7 +264,11 @@ impl HostIO {
                         let mut io = s.comm.borrow_mut();
                         io.append(&[cmd as u8]);
                         io.append(data);
-                        Poll::Pending
+                        if wait {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(())
+                        }
                     }
                 }
                 Err(_) => Poll::Pending,
@@ -276,7 +280,7 @@ impl HostIO {
     /// future get_chunk.
     pub fn put_chunk<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = SHA256> {
         async move {
-            self.send_write_command(LedgerToHostCmd::PutChunk, chunk).await;
+            self.send_write_command(LedgerToHostCmd::PutChunk, chunk, true).await;
             sha256_hash(chunk)
         }
     }
@@ -284,12 +288,12 @@ impl HostIO {
     /// Write a piece of output to the host, but don't declare that we are done; the host will
     /// return to the ledger to get more.
     pub fn result_accumulating<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = ()> {
-        self.send_write_command(LedgerToHostCmd::ResultAccumulating, chunk)
+        self.send_write_command(LedgerToHostCmd::ResultAccumulating, chunk, true)
     }
     /// Write the final piece of output to the host; after this, we're done and the host does not
     /// contact us again on this subject.
     pub fn result_final<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = ()> {
-        self.send_write_command(LedgerToHostCmd::ResultFinal, chunk)
+        self.send_write_command(LedgerToHostCmd::ResultFinal, chunk, false)
     }
 }
 
