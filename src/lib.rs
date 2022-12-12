@@ -1,25 +1,12 @@
 //! Stock code for writing APDUs that use the block protocol using futures.
 //!
+//! To use, for each APDU write an async function taking HostIO, which calls HostIO::get_params
+//! as it's first action (before any .await), and write an function from HostIO and some instruction
+//! type, returning a future (impl trait in bindings is useful here). Then in main, call
+//! poll_apdu_handlers for Command events.
 //!
-//! To use, for each APDU write a struct type for each APDU and provide instances of [AsyncAPDU]
-//! and [AsyncAPDUStated], and call [poll_apdu_handler] when dispatch identifies that APDU. The
-//! future returned by [AsyncAPDU::run] can use any parser defined via
-//! [ledger_parser_combinators::async_parser] by simply passing the appropriate [ByteStream] to it
-//! and using `.await`.
-//!
-//! In order to implement [AsyncAPDUStated] it will be necessary to write a StateHolder enum, and
-//! provide an empty struct implementing StateHolderCtr to AsyncAPDUStated; the StateHolderCtr is
-//! essentially a constructor for a StateHolder with the appropriate lifetime variable;
-//! [AsyncAPDUStated::init] should call the [AsyncAPDU::run] and put the result in an appropriate
-//! variant of the StateHolder enum, and [AsyncAPDUStated::poll] should match on the StateHolder
-//! enum and poll the contained future if the APDU is the current one.
-//!
-//! From within [AsyncAPDU::run] there is access to both a [ByteStream] for each parameter of the
-//! APDU supporting [ledger_parser_combinators::async_parser::Readable] and a handle to [HostIO];
-//! [HostIO::get_chunk] and [HostIO::put_chunk] may be used to read and write arbitrary chunks of
-//! content-indexed data from and to the host, and [HostIO::result_accumulating] and
-//! [HostIO::result_final] send pieces of final result to the host. An APDU handler must call
-//! [HostIO::result_final] upon successful completion of the APDU.
+//! Individual APDU handlers can then call parsers with the ByteStreams from the get_params call,
+//! and send responses back to the host with result_accumulating and result_final on HostIO.
 //!
 //! # Example
 //!
@@ -29,90 +16,52 @@
 //! use core::task::*;
 //! use ledger_async_block::*;
 //! use ledger_parser_combinators::async_parser::*;
-//! use pin_project::pin_project;
+//! use core::mem::MaybeUninit;
 //!
-//!
-//! struct ExampleAPDU;
-//!
-//! impl AsyncAPDU for ExampleAPDU {
-//!     type State<'a> = impl Future<Output = ()>;
-//!     fn run<'a>(self, io: HostIO, input: ArrayVec<ByteStream, MAX_PARAMS>) -> Self::State<'a> {
-//!         async move {
-//!             // Parse an array of four bytes from the input; ignore any remainder.
-//!             let data = (DefaultInterp as AsyncParser<Array<u8, 4>>).parse(&mut input[0]).await;
-//!             // Send the four bytes back to the host.
-//!             io.result_final(&data).await;
-//!         }
+//! pub fn example_apdu(self, io: HostIO) -> Self::State<'a> {
+//!     async move {
+//!         let mut input = io.get_params::<1>();
+//!         // Parse an array of four bytes from the input; ignore any remainder.
+//!         let data = (DefaultInterp as AsyncParser<Array<u8, 4>>).parse(&mut input[0]).await;
+//!         // Send the four bytes back to the host.
+//!         io.result_final(&data).await;
 //!     }
 //! }
 //!
-//! // State holder for the APDUs
-//! #[pin_project(project = APDUStateProjection)]
-//! enum APDUState<'a> {
-//!   NoState,
-//!   ExampleAPDUState(#[pin] <ExampleAPDU as AsyncAPDU>::State<'a>),
-//! }
-//!
-//! static mut COMM_CELL : Option<RefCell<io::Comm>> = None;
-//! static mut HOST_IO_STATE : Option<RefCell<HostIOState>> = None;
-//! static mut STATES_BACKING : APDUState<'static> = APDUState::NoState;
+//! static mut COMM_CELL : MaybeUninit<RefCell<io::Comm>> = MaybeUninit::uninit();
+//! static mut HOST_IO_STATE : MaybeUninit<RefCell<HostIOState>> = MaybeUninit::uninit();
+//! static mut STATES_BACKING : MaybeUninit<Option<APDUsFuture>> = MaybeUninit::uninit();
 //!
 //! unsafe fn initialize() {
-//!     COMM_CELL=Some(RefCell::new(io::Comm::new()));
-//!     let comm = COMM_CELL.as_ref().unwrap();
-//!     HOST_IO_STATE = Some(RefCell::new(HostIOState {
-//!         comm: comm,
-//!         requested_block: None,
-//!         sent_command: None,
-//!     }));
+//!    STATES_BACKING.write(None);
+//!    COMM_CELL.write(RefCell::new(io::Comm::new()));
+//!    let comm = COMM_CELL.assume_init_ref();
+//!    HOST_IO_STATE.write(RefCell::new(HostIOState {
+//!        comm: comm,
+//!        requested_block: None,
+//!        sent_command: None,
+//!    }));
 //! }
-//!
 //!
 //! extern "C" fn sample_main() {
 //!   ...
 //!   unsafe { initialize(); }
-//!   let mut states = unsafe { Pin::new_unchecked( &mut STATES_BACKING ) };
+//!   let host_io = HostIO(unsafe { HOST_IO_STATE.assume_init_ref() });
+//!   let mut states = unsafe { Pin::new_unchecked( STATES_BACKING.assume_init_mut() ) };
 //!   ...
-//!   match handle_apdu(host_io, ins, &mut states) {
+//!   match poll_apdu_handlers(&mut states, ins, host_io, (), handle_apdu) {
 //!     Ok(()) => { comm.borrow_mut().reply_ok() }
 //!     Err(sw) => { comm.borrow_mut().reply(sw) }
 //!   }
 //! }
 //!
-//! handle_apdu<'a: 'b, 'b>(io: HostIO, ins: Ins, state: &'b mut Pin<&'a mut ParsersState<'a>>)
-//!     -> Result<(), Reply> {
+//! type APDUsFuture = impl Future<Output = ()>;
+//! handle_apdu<'a: 'b, 'b>(io: HostIO, ins: Ins) -> APDUsFuture {
 //!         match ins {
-//!             Ins::ExampleAPDU => poll_apdu_handler(state, io, ExampleAPDU)?
+//!             Ins::ExampleAPDU => example_apdu(io).await,
 //!         }
 //!     }
 //!
-//! // Boilerplate to set and retrieve states from the state holder; should really be simpler than
-//! // this.
-//! struct APDUStateConstructor;
-//! impl StateHolderCtr for APDUStateConstructor {
-//!     type StateCtr<'a> = APDUState<'a>;
-//! }
-//!
-//! impl AsyncAPDUStated for ExampleAPDU {
-//!     #[inline(never)]
-//!     fn init<'a, 'b: 'a>(
-//!         self,
-//!         s: &mut core::pin::Pin<&'a mut ParsersState<'a>>,
-//!         io: HostIO,
-//!         input: ArrayVec<ByteStream, MAX_PARAMS>
-//!     ) -> () {
-//!         s.set(APDUState::ExampleAPDUState(self.run(io, input)));
-//!     }
-//!     #[inline(never)]
-//!     fn poll<'a, 'b>(self, s: &mut core::pin::Pin<&'a mut ParsersState>) -> core::task::Poll<()> {
-//!         let waker = unsafe { Waker::from_raw(RawWaker::new(&(), &RAW_WAKER_VTABLE)) };
-//!         let mut ctxd = Context::from_waker(&waker);
-//!         match s.as_mut().project() {
-//!             APDUStateProjection::ExampleAPDUState(ref mut s) => s.as_mut().poll(&mut ctxd),
-//!             _ => panic!("Ooops"),
-//!         }
-//!     }
-//! }
 //!
 //! ```
 //!
@@ -140,7 +89,8 @@ use core::cell::{RefCell, Ref, RefMut}; //, BorrowMutError};
 
 #[repr(u8)]
 #[derive(Debug)]
-enum HostToLedgerCmd {
+#[derive(PartialEq)]
+pub enum HostToLedgerCmd {
     START = 0,
     GetChunkResponseSuccess = 1,
     GetChunkResponseFailure = 2,
@@ -261,7 +211,7 @@ impl HostIO {
         })
     }
 
-    fn send_write_command<'a: 'c, 'b: 'c, 'c>(self, cmd: LedgerToHostCmd, data: &'b [u8]) -> impl 'c + Future<Output = ()> {
+    fn send_write_command<'a: 'c, 'b: 'c, 'c>(self, cmd: LedgerToHostCmd, data: &'b [u8], wait: bool) -> impl 'c + Future<Output = ()> {
         core::future::poll_fn(move |_| {
             match self.0.try_borrow_mut() {
                 Ok(ref mut s) => {
@@ -273,7 +223,11 @@ impl HostIO {
                         let mut io = s.comm.borrow_mut();
                         io.append(&[cmd as u8]);
                         io.append(data);
-                        Poll::Pending
+                        if wait {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(())
+                        }
                     }
                 }
                 Err(_) => Poll::Pending,
@@ -285,7 +239,7 @@ impl HostIO {
     /// future get_chunk.
     pub fn put_chunk<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = SHA256> {
         async move {
-            self.send_write_command(LedgerToHostCmd::PutChunk, chunk).await;
+            self.send_write_command(LedgerToHostCmd::PutChunk, chunk, true).await;
             sha256_hash(chunk)
         }
     }
@@ -293,12 +247,28 @@ impl HostIO {
     /// Write a piece of output to the host, but don't declare that we are done; the host will
     /// return to the ledger to get more.
     pub fn result_accumulating<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = ()> {
-        self.send_write_command(LedgerToHostCmd::ResultAccumulating, chunk)
+        self.send_write_command(LedgerToHostCmd::ResultAccumulating, chunk, true)
     }
     /// Write the final piece of output to the host; after this, we're done and the host does not
     /// contact us again on this subject.
     pub fn result_final<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = ()> {
-        self.send_write_command(LedgerToHostCmd::ResultFinal, chunk)
+        self.send_write_command(LedgerToHostCmd::ResultFinal, chunk, false)
+    }
+
+    /// Get the parameters for the current APDU. Must be called first, while the
+    /// HostToLedgerCmd::START message is still in the buffer.
+    pub fn get_params<const N: usize>(self) -> Option<ArrayVec<ByteStream, N>> {
+        if (*self.get_comm().ok()?.get_data().ok()?.get(0)?).try_into().ok() == Some(HostToLedgerCmd::START) {
+            let mut params = ArrayVec::<ByteStream, N>::new();
+            for param in self.get_comm().ok()?.get_data().ok()?[1..].chunks_exact(HASH_LEN) {
+                params.try_push(ByteStream {
+                    host_io: self,
+                    current_chunk: param.try_into().or(Err(io::StatusWords::Unknown)).ok()?,
+                    current_offset: 0
+                }).ok()?;
+            }
+            Some(params)
+        } else { None }
     }
 }
 
@@ -343,67 +313,42 @@ impl UnwrappableReadable for ByteStream {
     }
 }
 
-// We'd really rather have this be part of AsyncAPDU below, but the compiler crashes at the moment
-// if we do that. If it stops crashing, delete this line and make everywhere that uses MAX_PARAMS
-// refer to the relevant AsyncAPDU.
-pub const MAX_PARAMS: usize = 2;
-
-pub trait AsyncAPDU : 'static + Sized {
-    // const MAX_PARAMS: usize;
-    type State<'c>: Future<Output = ()>;
-    // fn run<'c>(self, io: HostIO, input: ArrayVec<ByteStream, { Self::MAX_PARAMS }>) -> Self::State<'c>;
-    fn run<'c>(self, io: HostIO, input: ArrayVec<ByteStream, MAX_PARAMS>) -> Self::State<'c>;
-}
-
-pub trait StateHolderCtr {
-    type StateCtr<'a> : Default;
-}
-
-pub trait AsyncAPDUStated<StateHolderT: 'static + StateHolderCtr> : AsyncAPDU {
-    fn init<'a, 'b: 'a>(
-        self,
-        s: &mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>,
-        io: HostIO,
-        input: ArrayVec<ByteStream, MAX_PARAMS>
-    ) -> ();
-
-    // fn get<'a, 'b>(self, s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>) -> Option<&'b mut core::pin::Pin<&'a mut Self::State<'a>>>;
-
-    fn poll<'a, 'b>(self, s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>) -> core::task::Poll<()>;
-
-    /* {
-        let waker = unsafe { Waker::from_raw(RawWaker::new(&(), &RAW_WAKER_VTABLE)) };
-        let mut ctxd = Context::from_waker(&waker);
-        match self.get(s) {
-            Some(ref mut s) => s.as_mut().poll(&mut ctxd),
-            None => panic!("Oops"),
-        }
-    }*/
-}
-
 pub static RAW_WAKER_VTABLE : RawWakerVTable = RawWakerVTable::new(|a| RawWaker::new(a, &RAW_WAKER_VTABLE), |_| {}, |_| {}, |_| {});
+
+// Hashing required for validating blocks from the host.
+
+fn sha256_hash(data: &[u8]) -> [u8; 32] {
+    let mut rv = [0; 32];
+    unsafe {
+        let mut hasher = cx_sha256_s::default();
+        cx_sha256_init_no_throw(&mut hasher);
+        let hasher_ref = &mut hasher as *mut cx_sha256_s as *mut cx_hash_t;
+        cx_hash_update(hasher_ref, data.as_ptr(), data.len() as u32);
+        cx_hash_final(hasher_ref, rv.as_mut_ptr());
+    }
+    rv
+}
+
+// Stack control helper.
+#[inline(never)]
+pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
+    f()
+}
 
 /// Main entry point: run an AsyncAPDU given an input.
 #[inline(never)]
-pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 'a + AsyncAPDUStated<StateHolderT> + Copy, T: AsyncTrampoline>     (
-    s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>,
+pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, Ins, A: Fn(HostIO, Ins)->F>(
+    s: &'b mut core::pin::Pin<&'a mut Option<F>>,
+    ins: Ins,
     io: HostIO,
     trampoline: &mut T,
-    apdu: A
-) -> Result<(), Reply> where [(); MAX_PARAMS]: Sized {
-    let command = io.get_comm()?.get_data()?[0].try_into();
+    apdus: A
+) -> Result<(), Reply> {
+    let command = if io.get_comm()?.get_data()?.len() > 0 { io.get_comm()?.get_data()?[0].try_into() } else { Ok(HostToLedgerCmd::START) }; // Map empty APDUs to STARTs, so we can handle those the same as ones with inputs.
     match command {
         Ok(HostToLedgerCmd::START) => {
             call_me_maybe( || {
-            let mut params = ArrayVec::<ByteStream, MAX_PARAMS>::new();
-            for param in io.get_comm().ok()?.get_data().ok()?[1..].chunks_exact(HASH_LEN) {
-                params.try_push(ByteStream {
-                    host_io: io,
-                    current_chunk: param.try_into().or(Err(io::StatusWords::Unknown)).ok()?,
-                    current_offset: 0
-                }).ok()?;
-            }
-            apdu.init(s, io, params);
+            s.set(Some(apdus(io, ins))); // Initialize the APDU represented.
             Some(())
             } ).ok_or(io::StatusWords::Unknown)?;
         }
@@ -437,15 +382,21 @@ pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 
 
     loop {
         // And run the future for this APDU.
-        match apdu.poll(s) {
+        let waker = unsafe { Waker::from_raw(RawWaker::new(&(), &RAW_WAKER_VTABLE)) };
+        let mut ctxd = Context::from_waker(&waker);
+        match s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?.poll(&mut ctxd) {
             Poll::Pending => {
                 let mut trampoline_res = AsyncTrampolineResult::Pending;
+                let mut did_trampoline = false;
                 // First, clear any trampolines we might have pending
                 while trampoline_res == AsyncTrampolineResult::Pending {
                     trampoline_res = trampoline.handle_command();
+                    did_trampoline = true;
                 }
                 // Then, check that if we're waiting that we've actually given the host something to do.
-                if io.0.borrow().sent_command.is_some() {
+                // We need to not early return here if we ran a trampoline and the command is
+                // ResultFinal, so the future can run to completion.
+                if io.0.borrow().sent_command.is_some() && !(did_trampoline && io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultFinal)) {
                     return Ok(())
                 } else if trampoline_res == AsyncTrampolineResult::Resolved {
                 } else {
@@ -458,30 +409,12 @@ pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 
                     error!("APDU handler future completed but did not send a command; the last line is probably missing an .await");
                     Err(io::StatusWords::Unknown)?
                 }
-                s.set(core::default::Default::default());
+                call_me_maybe( || {
+                    s.set(None);
+                    Some(())
+                });
                 return Ok(())
             }
         }
     }
 }
-
-// Hashing required for validating blocks from the host.
-
-fn sha256_hash(data: &[u8]) -> [u8; 32] {
-    let mut rv = [0; 32];
-    unsafe {
-        let mut hasher = cx_sha256_s::default();
-        cx_sha256_init_no_throw(&mut hasher);
-        let hasher_ref = &mut hasher as *mut cx_sha256_s as *mut cx_hash_t;
-        cx_hash_update(hasher_ref, data.as_ptr(), data.len() as u32);
-        cx_hash_final(hasher_ref, rv.as_mut_ptr());
-    }
-    rv
-}
-
-// Stack control helper.
-#[inline(never)]
-pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
-    f()
-}
-
