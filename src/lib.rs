@@ -184,6 +184,16 @@ pub struct HostIOState {
     pub sent_command: Option<LedgerToHostCmd>
 }
 
+impl HostIOState {
+    pub const fn new(comm: &'static RefCell<io::Comm>) -> HostIOState {
+        HostIOState {
+            comm: comm,
+            requested_block: None,
+            sent_command: None
+        }
+    }
+}
+
 impl core::fmt::Debug for HostIOState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "HostIOState {{ comm: {}, requested_block: {:?}, sent_command: {:?} }}", if self.comm.try_borrow().is_ok() {"not borrowed"} else {"borrowed"}, self.requested_block, self.sent_command)
