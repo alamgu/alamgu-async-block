@@ -123,7 +123,7 @@ pub enum LedgerToHostCmd {
 }
 
 const HASH_LEN: usize = 32;
-pub type SHA256 = [u8; HASH_LEN];
+pub type SHA256Sum = [u8; HASH_LEN];
 
 
 #[derive(Debug)]
@@ -131,7 +131,7 @@ pub struct ChunkNotFound;
 
 pub struct HostIOState {
     pub comm: &'static RefCell<io::Comm>,
-    pub requested_block: Option<SHA256>,
+    pub requested_block: Option<SHA256Sum>,
     pub sent_command: Option<LedgerToHostCmd>
 }
 
@@ -216,7 +216,7 @@ impl HostIO {
     }
 
     /// Get a chunk, identified by SHA256 hash of it's contents, from the host.
-    pub fn get_chunk(self, sha: SHA256) -> impl Future<Output = Result<Ref<'static, [u8]>, ChunkNotFound>> {
+    pub fn get_chunk(self, sha: SHA256Sum) -> impl Future<Output = Result<Ref<'static, [u8]>, ChunkNotFound>> {
         core::future::poll_fn(move |_| {
             match self.0.try_borrow_mut() {
                 Ok(ref mut s) => {
@@ -263,7 +263,7 @@ impl HostIO {
 
     /// Write a chunk to the host, returning the SHA256 of it's contents, used as an address for a
     /// future get_chunk.
-    pub fn put_chunk<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = SHA256> {
+    pub fn put_chunk<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = SHA256Sum> {
         async move {
             self.send_write_command(LedgerToHostCmd::PutChunk, chunk, true).await;
             sha256_hash(chunk)
@@ -303,7 +303,7 @@ impl HostIO {
 #[derive(Clone)]
 pub struct ByteStream {
     host_io: HostIO,
-    current_chunk: SHA256,
+    current_chunk: SHA256Sum,
     current_offset: usize
 }
 
