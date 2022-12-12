@@ -79,6 +79,7 @@ use arrayvec::ArrayVec;
 use core::future::Future;
 use nanos_sdk::bindings::*;
 use ledger_parser_combinators::async_parser::{Readable, UnwrappableReadable, reject};
+use core::pin::Pin;
 
 use nanos_sdk::io::Reply;
 use core::convert::TryFrom;
@@ -165,6 +166,45 @@ impl AsyncTrampoline for () {
 }
 
 
+pub struct WriterFuture<'a> {
+    io: HostIO,
+    sent: bool,
+    cmd: LedgerToHostCmd,
+    data: &'a [u8],
+    wait: bool,
+}
+
+impl<'a> Future for WriterFuture<'a> {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let sel = Pin::into_inner(self); // We can do this because we know Self is Unpin, no
+                                     // self-references in it.
+        match sel.io.0.try_borrow_mut() {
+            Ok(ref mut s) => {
+                if sel.sent {
+                    Poll::Ready(())
+                } else if s.sent_command.is_some() {
+                    Poll::Pending
+                } else {
+                    s.requested_block = None;
+                    s.sent_command = Some(sel.cmd);
+                    let mut io = s.comm.borrow_mut();
+                    io.append(&[sel.cmd as u8]);
+                    io.append(sel.data);
+                    sel.sent = true;
+                    if sel.wait {
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(())
+                    }
+                }
+            }
+            Err(_) => Poll::Pending,
+        }
+    }
+}
+
+
 #[derive(Copy, Clone, Debug)]
 pub struct HostIO(pub &'static RefCell<HostIOState>);
 
@@ -212,27 +252,13 @@ impl HostIO {
     }
 
     fn send_write_command<'a: 'c, 'b: 'c, 'c>(self, cmd: LedgerToHostCmd, data: &'b [u8], wait: bool) -> impl 'c + Future<Output = ()> {
-        core::future::poll_fn(move |_| {
-            match self.0.try_borrow_mut() {
-                Ok(ref mut s) => {
-                    if s.sent_command.is_some() {
-                        Poll::Pending
-                    } else {
-                        s.requested_block = None;
-                        s.sent_command = Some(cmd);
-                        let mut io = s.comm.borrow_mut();
-                        io.append(&[cmd as u8]);
-                        io.append(data);
-                        if wait {
-                            Poll::Pending
-                        } else {
-                            Poll::Ready(())
-                        }
-                    }
-                }
-                Err(_) => Poll::Pending,
-            }
-        })
+        WriterFuture {
+            io: self,
+            sent: false,
+            cmd: cmd,
+            data: data,
+            wait: wait,
+        }
     }
 
     /// Write a chunk to the host, returning the SHA256 of it's contents, used as an address for a
@@ -338,11 +364,11 @@ pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
 /// Main entry point: run an AsyncAPDU given an input.
 #[inline(never)]
 pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, Ins, A: Fn(HostIO, Ins)->F>(
-    s: &'b mut core::pin::Pin<&'a mut Option<F>>,
+    mut s: core::pin::Pin<&'a mut Option<F>>,
     ins: Ins,
     io: HostIO,
-    trampoline: &mut T,
-    apdus: A
+    mut trampoline: T,
+    apdus: A,
 ) -> Result<(), Reply> {
     let command = if io.get_comm()?.get_data()?.len() > 0 { io.get_comm()?.get_data()?[0].try_into() } else { Ok(HostToLedgerCmd::START) }; // Map empty APDUs to STARTs, so we can handle those the same as ones with inputs.
     match command {
@@ -382,7 +408,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, 
 
     loop {
         // And run the future for this APDU.
-        let waker = unsafe { Waker::from_raw(RawWaker::new(&(), &RAW_WAKER_VTABLE)) };
+        let waker = unsafe { Waker::from_raw(RawWaker::new(&(), nanos_sdk::pic_rs(&RAW_WAKER_VTABLE) )) };
         let mut ctxd = Context::from_waker(&waker);
         match s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?.poll(&mut ctxd) {
             Poll::Pending => {
