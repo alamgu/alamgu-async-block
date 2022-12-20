@@ -68,8 +68,9 @@
 #![no_std]
 #![allow(incomplete_features)]
 #![feature(adt_const_params)]
-#![feature(generic_const_exprs)]
+#![feature(async_closure)]
 #![feature(generic_associated_types)]
+#![feature(if_let_guard)]
 #![feature(type_alias_impl_trait)]
 #![feature(future_poll_fn)]
 
@@ -82,11 +83,13 @@ use ledger_parser_combinators::async_parser::{Readable, UnwrappableReadable, rej
 use core::pin::Pin;
 
 use nanos_sdk::io::Reply;
+use nanos_sdk::buttons::ButtonEvent;
 use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::task::*;
 use core::cell::{RefCell, Ref, RefMut}; //, BorrowMutError};
 
+pub mod prompts;
 
 #[repr(u8)]
 #[derive(Debug)]
@@ -132,7 +135,9 @@ pub struct ChunkNotFound;
 pub struct HostIOState {
     pub comm: &'static RefCell<io::Comm>,
     pub requested_block: Option<SHA256Sum>,
-    pub sent_command: Option<LedgerToHostCmd>
+    pub sent_command: Option<LedgerToHostCmd>,
+    pub button_wait: bool,
+    pub button: Option<ButtonEvent>
 }
 
 impl HostIOState {
@@ -140,14 +145,16 @@ impl HostIOState {
         HostIOState {
             comm: comm,
             requested_block: None,
-            sent_command: None
+            sent_command: None,
+            button_wait: false,
+            button: None
         }
     }
 }
 
 impl core::fmt::Debug for HostIOState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "HostIOState {{ comm: {}, requested_block: {:?}, sent_command: {:?} }}", if self.comm.try_borrow().is_ok() {"not borrowed"} else {"borrowed"}, self.requested_block, self.sent_command)
+        write!(f, "HostIOState {{ comm: {}, requested_block: {:?}, sent_command: {:?}, button_wait: {:?}, button: {:?} }}", if self.comm.try_borrow().is_ok() {"not borrowed"} else {"borrowed"}, self.requested_block, self.sent_command, self.button_wait, self.button)
     }
 }
 
@@ -296,6 +303,35 @@ impl HostIO {
             Some(params)
         } else { None }
     }
+
+    pub fn next_button(self) -> impl Future<Output = ButtonEvent> {
+        async move {
+            core::future::poll_fn(|_| {
+                match self.0.try_borrow_mut() {
+                    Ok(ref mut s) if !s.button_wait => {
+                        s.button_wait = true;
+                        Poll::Ready(())
+                    },
+                    _ => Poll::Pending,
+                }
+            }).await;
+            trace!("Set waiting for button");
+            // Now we know that we've set to wait for buttons, so if there _is_ a button, it's
+            // ours.
+            core::future::poll_fn(|_| {
+                trace!("Polling in button handler");
+                match self.0.try_borrow_mut() {
+                    Ok(ref mut s) if let Some(button) = s.button => {
+                        trace!("Got a button");
+                        s.button = None;
+                        s.button_wait = false;
+                        Poll::Ready(button)
+                    },
+                    _ => {trace!("No button yet"); Poll::Pending}
+                }
+            }).await
+        }
+    }
 }
 
 /// Concrete implementation of the interface defined by
@@ -365,16 +401,18 @@ pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
 #[inline(never)]
 pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, Ins, A: Fn(HostIO, Ins)->F>(
     mut s: core::pin::Pin<&'a mut Option<F>>,
-    ins: Ins,
+    ins: Option<Ins>,
     io: HostIO,
     mut trampoline: T,
     apdus: A,
 ) -> Result<(), Reply> {
+    trace!("Polling handler, buttons: {:?}", io.0.borrow().button);
     let command = if io.get_comm()?.get_data()?.len() > 0 { io.get_comm()?.get_data()?[0].try_into() } else { Ok(HostToLedgerCmd::START) }; // Map empty APDUs to STARTs, so we can handle those the same as ones with inputs.
     match command {
-        Ok(HostToLedgerCmd::START) => {
+        _ if io.0.borrow().button.is_some() => { trace!("Handling buttons, except from rules"); }
+        Ok(HostToLedgerCmd::START) if let Some(ins_val) = ins => {
             call_me_maybe( || {
-            s.set(Some(apdus(io, ins))); // Initialize the APDU represented.
+            s.set(Some(apdus(io, ins_val))); // Initialize the APDU represented.
             Some(())
             } ).ok_or(io::StatusWords::Unknown)?;
         }
@@ -400,6 +438,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, 
         // Reject otherwise.
         _ => Err(io::StatusWords::Unknown)?,
     }
+    trace!("Validated, handling");
 
     
     // We use this to wait if we've already got a command to send, so clear it now that we're
@@ -410,6 +449,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, 
         // And run the future for this APDU.
         let waker = unsafe { Waker::from_raw(RawWaker::new(&(), nanos_sdk::pic_rs(&RAW_WAKER_VTABLE) )) };
         let mut ctxd = Context::from_waker(&waker);
+        trace!("Calling top future");
         match s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?.poll(&mut ctxd) {
             Poll::Pending => {
                 let mut trampoline_res = AsyncTrampolineResult::Pending;
@@ -419,10 +459,11 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, 
                     trampoline_res = trampoline.handle_command();
                     did_trampoline = true;
                 }
+                trace!("Button wait: {:?}", io.0.borrow().button_wait);
                 // Then, check that if we're waiting that we've actually given the host something to do.
                 // We need to not early return here if we ran a trampoline and the command is
                 // ResultFinal, so the future can run to completion.
-                if io.0.borrow().sent_command.is_some() && !(did_trampoline && io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultFinal)) {
+                if (io.0.borrow().sent_command.is_some() || io.0.borrow().button_wait) && !(did_trampoline && io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultFinal)) {
                     return Ok(())
                 } else if trampoline_res == AsyncTrampolineResult::Resolved {
                 } else {
