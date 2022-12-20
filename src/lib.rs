@@ -66,9 +66,6 @@
 //! ```
 //!
 #![no_std]
-#![allow(incomplete_features)]
-#![feature(adt_const_params)]
-#![feature(generic_const_exprs)]
 #![feature(generic_associated_types)]
 #![feature(type_alias_impl_trait)]
 #![feature(future_poll_fn)]
@@ -86,6 +83,8 @@ use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::task::*;
 use core::cell::{RefCell, Ref, RefMut}; //, BorrowMutError};
+
+pub mod prompts;
 
 
 #[repr(u8)]
