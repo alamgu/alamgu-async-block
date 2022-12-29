@@ -84,8 +84,6 @@ use core::convert::TryInto;
 use core::task::*;
 use core::cell::{RefCell, Ref, RefMut}; //, BorrowMutError};
 
-pub mod prompts;
-
 
 #[repr(u8)]
 #[derive(Debug)]
@@ -338,7 +336,17 @@ impl UnwrappableReadable for ByteStream {
     }
 }
 
+
 pub static RAW_WAKER_VTABLE : RawWakerVTable = RawWakerVTable::new(|a| RawWaker::new(a, &RAW_WAKER_VTABLE), |_| {}, |_| {}, |_| {});
+
+pub fn poll_with_trivial_context<Fut: Future>(f: Pin<&mut Fut>) -> core::task::Poll<Fut::Output> {
+    let waker = unsafe { Waker::from_raw(RawWaker::new(&(), nanos_sdk::pic_rs(&RAW_WAKER_VTABLE) )) };
+    let mut ctxd = Context::from_waker(&waker);
+    let r = f.poll(&mut ctxd);
+    core::mem::forget(ctxd);
+    core::mem::forget(waker);
+    r
+}
 
 // Hashing required for validating blocks from the host.
 
@@ -407,9 +415,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, T: AsyncTrampoline, F: Future<Output=()>, 
 
     loop {
         // And run the future for this APDU.
-        let waker = unsafe { Waker::from_raw(RawWaker::new(&(), nanos_sdk::pic_rs(&RAW_WAKER_VTABLE) )) };
-        let mut ctxd = Context::from_waker(&waker);
-        match s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?.poll(&mut ctxd) {
+        match poll_with_trivial_context(s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?) {
             Poll::Pending => {
                 let mut trampoline_res = AsyncTrampolineResult::Pending;
                 let mut did_trampoline = false;
