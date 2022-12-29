@@ -13,7 +13,12 @@ pub struct PromptQueue {
     prev: SHA256Sum,
 }
 
+#[cfg(target_os = "nanos")]
 const PROMPT_CHUNK_LENGTH : usize = 16;
+
+#[cfg(not(target_os = "nanos"))]
+const PROMPT_CHUNK_LENGTH : usize = 64;
+
 type PromptBuffer = ArrayVec::<u8, {32+19+PROMPT_CHUNK_LENGTH}>;
 
 #[derive(Debug, PartialEq)]
@@ -75,11 +80,29 @@ impl PromptQueue {
                 PromptingState::Prompts => {
                     trace!("Showing prompts");
                     Bagl::LABELLINE(LabelLine::new().pos(0, 10).text(currentTitle.as_str())).display();
-                    Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(currentBody.as_str())).paint();
+                    #[cfg(target_os = "nanos")]
+                        {
+                            Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(currentBody.as_str())).paint();
+                        }
+                    #[cfg(not(target_os = "nanos"))]
+                        {
+                            currentBody.as_str().get(0 .. 16).map(
+                            |body| Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(body)).paint()
+                            );
+                            currentBody.as_str().get(16 .. 32).map(
+                            |body| Bagl::LABELLINE(LabelLine::new().pos(0, 37).text(body)).paint()
+                            );
+                            currentBody.as_str().get(32 .. 48).map(
+                            |body| Bagl::LABELLINE(LabelLine::new().pos(0, 49).text(body)).paint()
+                            );
+                            currentBody.as_str().get(48 .. 64).map(
+                            |body| Bagl::LABELLINE(LabelLine::new().pos(0, 61).text(body)).paint()
+                            );
+                        }
                     if backward.prev != [0; 32] {
-                        RIGHT_ARROW.paint();
+                        LEFT_ARROW.paint();
                     }
-                    LEFT_ARROW.paint();
+                    RIGHT_ARROW.paint();
                 }
                 PromptingState::Confirm => {
                     trace!("Showing confirm");
@@ -163,9 +186,9 @@ impl PromptQueue {
         chunk.push(title.len() as u8);
         chunk.push(segment.len() as u8);
         // trace!("CHUNK: {:?}", chunk);
-        chunk.try_extend_from_slice(title.as_bytes()).unwrap();
+        chunk.try_extend_from_slice(title.as_bytes()); // .unwrap();
         // trace!("CHUNK: {:?}", chunk);
-        chunk.try_extend_from_slice(segment.as_bytes()).unwrap();
+        chunk.try_extend_from_slice(segment.as_bytes()); // .unwrap();
         // trace!("CHUNK: {:?}", chunk);
         trace!("Buffer is: {:?}, segment: {}", chunk, segment);
         self.prev = self.io.put_chunk(&chunk).await;
@@ -174,11 +197,15 @@ impl PromptQueue {
     }
 
     pub async fn add_prompt(&mut self, title: &str, args: Arguments<'_>) -> Result<(), PromptingError> {
+        trace!("Add prompt");
         let mut writer = ChunkedWrite::new();
         while !writer.terminated() {
+            trace!("Writing");
             core::fmt::write(&mut writer, args);
+            trace!("Adding chunk, state: {:?}", &writer);
             self.add_prompt_chunk(title, writer.get_buffer()).await?;
             writer.advance();
+            trace!("Advanced.");
         }
         trace!("Prompt saved");
         Ok(())
@@ -187,8 +214,9 @@ impl PromptQueue {
 
 #[derive(Debug)]
 struct ChunkedWrite { 
-    n: usize,
-    i: usize,
+    skip: usize,
+    skip_this_pass: usize,
+    len: usize,
     terminated: bool,
     buffer: ArrayString<PROMPT_CHUNK_LENGTH>
 
@@ -197,16 +225,20 @@ struct ChunkedWrite {
 impl ChunkedWrite {
     fn new() -> ChunkedWrite {
         ChunkedWrite {
-            n: 0,
-            i: 0,
+            skip: 0,
+            skip_this_pass: 0,
+            len: 0,
             terminated: false,
             buffer: ArrayString::new()
         }
     }
     fn advance(&mut self) {
-        self.terminated = self.i <= self.n+PROMPT_CHUNK_LENGTH;
-        self.i=0;
-        self.n=self.n+PROMPT_CHUNK_LENGTH;
+        self.terminated = self.skip + self.buffer.len() >= self.len;
+        self.buffer.clear();
+        self.skip += PROMPT_CHUNK_LENGTH;
+        self.skip_this_pass = self.skip;
+        self.len = 0;
+        trace!("Advanced: {:?}", self)
     }
     fn terminated(&self) -> bool {
         self.terminated
@@ -218,16 +250,24 @@ impl ChunkedWrite {
 
 impl Write for ChunkedWrite {
     fn write_str(&mut self, s: &str) -> Result<(), Error> {
-        let n_in_string = self.n as isize - self.i as isize;
-        let ns_in_string = n_in_string + PROMPT_CHUNK_LENGTH as isize;
-        // let amount = core::cmp::min( s.len() - n_in_string,  PROMPT_CHUNK_LENGTH );
-        // trace!("Indices: {:?}", (core::cmp::max(0, n_in_string) as usize, core::cmp::min(s.len() as isize, ns_in_string) as usize));
-        let pushed_slice = &s[core::cmp::max(0, n_in_string) as usize ..core::cmp::min(s.len() as isize, ns_in_string) as usize];
-        // trace!("Slice: {}", pushed_slice);
-        if pushed_slice.len() > 0 { // n_in_string < s.len() && amount > 0 {
-            self.buffer.push_str(pushed_slice);
+        self.len += s.len();
+        
+        if self.skip_this_pass > s.len() {
+            self.skip_this_pass -= s.len();
+            trace!("Skipping still");
+            return Ok(());
         }
-        self.i = self.i + pushed_slice.len();
+        if self.buffer.is_full() {
+            trace!("Full");
+            return Ok(());
+        }
+        let pushed_slice = &s[self.skip_this_pass .. core::cmp::min(s.len(), PROMPT_CHUNK_LENGTH + self.skip_this_pass - self.buffer.len())];
+        trace!("Push slice: {}", pushed_slice);
+        self.skip_this_pass = core::cmp::max(0, self.skip_this_pass as isize - s.len() as isize) as usize;
+        trace!("Updated skip, pushing");
+
+        self.buffer.try_push_str(pushed_slice);
+        trace!("Pushed to buffer");
         Ok(())
     }
 }

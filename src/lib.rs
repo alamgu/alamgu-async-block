@@ -84,6 +84,7 @@ use core::convert::TryInto;
 use core::task::*;
 use core::cell::{RefCell, Ref, RefMut}; //, BorrowMutError};
 
+mod prompts;
 
 #[repr(u8)]
 #[derive(Debug)]
