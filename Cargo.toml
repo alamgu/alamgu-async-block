@@ -10,10 +10,10 @@ arrayvec = { version = "0.7.2", default-features = false }
 ledger-log = { git = "https://github.com/alamgu/ledger-log" }
 pin-project = "1.0.10"
 nanos_sdk = { git = "https://github.com/LedgerHQ/ledger-nanos-sdk.git" }
-nanos_ui = { git = "https://github.com/LedgerHQ/ledger-nanos-ui.git" }
+nanos_ui = { git = "https://github.com/obsidiansystems/ledger-nanos-ui.git" }
 ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split" }
 
 [patch.crates-io]
-ledger-parser-combinators = { git = "https://github.com/obsidiansystems/ledger-parser-combinators", branch = "async" }
+ledger-parser-combinators = { git = "https://github.com/obsidiansystems/ledger-parser-combinators", branch = "async-split" }
 ledger-log = { git = "https://github.com/obsidiansystems/ledger-platform", branch="wip-async" }
 nanos_sdk = { git = "https://github.com/obsidiansystems/ledger-nanos-sdk.git", branch = "use-ambient-compiler-and-target" }

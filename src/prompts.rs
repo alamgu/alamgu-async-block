@@ -52,6 +52,14 @@ impl PromptQueue {
         Ok(accum)
     }
 
+    pub async fn append(&mut self, other: &PromptQueue) -> Result<(), PromptingError> {
+        let mut from = other.reverse().await?;
+        while let Some((title, body)) = from.pop().await? {
+            self.add_prompt_chunk(&title, &body).await;
+        }
+        Ok(())
+    }
+
     pub async fn show(&mut self) -> Result<bool, PromptingError> {
         if self.prev == [0; 32] { return Err(PromptingError); } // No showing empty PromptQueues.
         

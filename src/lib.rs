@@ -340,7 +340,7 @@ impl UnwrappableReadable for ByteStream {
 
 pub static RAW_WAKER_VTABLE : RawWakerVTable = RawWakerVTable::new(|a| RawWaker::new(a, &RAW_WAKER_VTABLE), |_| {}, |_| {}, |_| {});
 
-pub fn poll_with_trivial_context<Fut: Future>(f: Pin<&mut Fut>) -> core::task::Poll<Fut::Output> {
+pub fn poll_with_trivial_context<Fut: Future + ?Sized>(f: Pin<&mut Fut>) -> core::task::Poll<Fut::Output> {
     let waker = unsafe { Waker::from_raw(RawWaker::new(&(), nanos_sdk::pic_rs(&RAW_WAKER_VTABLE) )) };
     let mut ctxd = Context::from_waker(&waker);
     let r = f.poll(&mut ctxd);
