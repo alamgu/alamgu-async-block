@@ -118,11 +118,11 @@
 //!
 #![no_std]
 #![allow(incomplete_features)]
-#![feature(adt_const_params)]
-#![feature(generic_const_exprs)]
-#![feature(generic_associated_types)]
 #![feature(type_alias_impl_trait)]
-#![feature(future_poll_fn)]
+
+#![feature(cfg_version)]
+#![cfg_attr(all(target_family="bolos", not(version("1.64"))), feature(future_poll_fn))]
+#![cfg_attr(all(target_family="bolos", not(version("1.65"))), feature(generic_associated_types))]
 
 use ledger_log::*;
 use nanos_sdk::io;
