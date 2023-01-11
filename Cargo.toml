@@ -10,9 +10,12 @@ arrayvec = { version = "0.7.2", default-features = false }
 ledger-log = { git = "https://github.com/alamgu/ledger-log" }
 pin-project = "1.0.10"
 nanos_sdk = { git = "https://github.com/LedgerHQ/ledger-nanos-sdk.git" }
-nanos_ui = { git = "https://github.com/obsidiansystems/ledger-nanos-ui.git" }
+nanos_ui = { git = "https://github.com/LedgerHQ/ledger-nanos-ui.git" }
 ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split-take-2" }
 
 [patch."https://github.com/LedgerHQ/ledger-nanos-sdk.git".nanos_sdk]
 git = "https://github.com/alamgu/ledger-nanos-sdk.git"
 branch = "support-nix-or-non-nix-toolchain"
+[patch."https://github.com/LedgerHQ/ledger-nanos-ui.git".nanos_ui]
+git = "https://github.com/obsidiansystems/ledger-nanos-ui"
+branch = "use-lib-bagl-for-x-and-splus"
