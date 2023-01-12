@@ -436,6 +436,10 @@ pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 
                 }
                 // Then, check that if we're waiting that we've actually given the host something to do.
                 if io.0.borrow().sent_command.is_some() {
+                    if io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultFinal) {
+                        // This is the end of the current APDU, so reset state
+                        s.set(core::default::Default::default());
+                    }
                     return Ok(())
                 } else if trampoline_res == AsyncTrampolineResult::Resolved {
                 } else {
