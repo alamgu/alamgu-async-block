@@ -78,26 +78,26 @@ impl PromptQueue {
 
         loop {
             // Display
-            let (currentTitle, currentBody) = title_and_body;
+            let (current_title, current_body) = title_and_body;
             match state {
                 PromptingState::Prompts => {
-                    Bagl::LABELLINE(LabelLine::new().pos(0, 10).text(currentTitle.as_str())).display();
+                    Bagl::LABELLINE(LabelLine::new().pos(0, 10).text(current_title.as_str())).display();
                     #[cfg(target_os = "nanos")]
                         {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(currentBody.as_str())).paint();
+                            Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(current_body.as_str())).paint();
                         }
                     #[cfg(not(target_os = "nanos"))]
                         {
-                            currentBody.as_str().get(0 .. 16).map(
+                            current_body.as_str().get(0 .. 16).map(
                             |body| Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(body)).paint()
                             );
-                            currentBody.as_str().get(16 .. 32).map(
+                            current_body.as_str().get(16 .. 32).map(
                             |body| Bagl::LABELLINE(LabelLine::new().pos(0, 37).text(body)).paint()
                             );
-                            currentBody.as_str().get(32 .. 48).map(
+                            current_body.as_str().get(32 .. 48).map(
                             |body| Bagl::LABELLINE(LabelLine::new().pos(0, 49).text(body)).paint()
                             );
-                            currentBody.as_str().get(48 .. 64).map(
+                            current_body.as_str().get(48 .. 64).map(
                             |body| Bagl::LABELLINE(LabelLine::new().pos(0, 61).text(body)).paint()
                             );
                         }
@@ -131,13 +131,13 @@ impl PromptQueue {
                 match (state.clone(), buttons_evt) {
                     (PromptingState::Prompts, ButtonEvent::LeftButtonRelease) => {
                         if backward.prev != [0; 32] {
-                            forward.add_prompt_chunk(&currentTitle, &currentBody).await?;
+                            forward.add_prompt_chunk(&current_title, &current_body).await?;
                             title_and_body = backward.pop().await?.unwrap();
                         }
                     }
                     (PromptingState::Prompts, ButtonEvent::RightButtonRelease) => {
                         if forward.prev != [0; 32] {
-                            backward.add_prompt_chunk(&currentTitle, &currentBody).await?;
+                            backward.add_prompt_chunk(&current_title, &current_body).await?;
                             title_and_body = forward.pop().await?.unwrap();
                         } else {
                             state = PromptingState::Confirm;
