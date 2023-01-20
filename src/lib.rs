@@ -176,7 +176,7 @@ pub struct WriterFuture<'a> {
 
 impl<'a> Future for WriterFuture<'a> {
     type Output = ();
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         let sel = Pin::into_inner(self); // We can do this because we know Self is Unpin, no
                                      // self-references in it.
         match sel.io.0.try_borrow_mut() {

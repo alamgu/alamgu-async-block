@@ -2,10 +2,8 @@ use arrayvec::ArrayString;
 use crate::*;
 use core::fmt::{Arguments, Write, Error};
 
-use nanos_ui::{bagls::*, ui::*};
+use nanos_ui::{bagls::*};
 use nanos_sdk::buttons::*;
-use nanos_sdk::io::Event;
-use ledger_log::*;
 
 #[derive(Clone, Debug)]
 pub struct PromptQueue {
