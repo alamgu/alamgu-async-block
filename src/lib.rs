@@ -241,30 +241,28 @@ impl HostIO {
             Ok(ref mut s) => {
                 if s.sent_command.is_some() {
                     Poll::Pending
-                } else {
-                    if s.requested_block == Some(sha) {
-                        match s.comm.borrow().get_data().ok().unwrap()[0].try_into() {
-                            Ok(HostToLedgerCmd::GetChunkResponseSuccess) => {
-                                Poll::Ready(Ok(Ref::map(s.comm.borrow(), |comm| {
-                                    &comm.get_data().ok().unwrap()[1..]
-                                })))
-                            }
-                            Ok(HostToLedgerCmd::GetChunkResponseFailure) => {
-                                Poll::Ready(Err(ChunkNotFound))
-                            }
-                            _ => {
-                                error!("Reached unreachable");
-                                panic!("Unreachable: should be filtered out by protocol rules before this point.")
-                            }
+                } else if s.requested_block == Some(sha) {
+                    match s.comm.borrow().get_data().ok().unwrap()[0].try_into() {
+                        Ok(HostToLedgerCmd::GetChunkResponseSuccess) => {
+                            Poll::Ready(Ok(Ref::map(s.comm.borrow(), |comm| {
+                                &comm.get_data().ok().unwrap()[1..]
+                            })))
                         }
-                    } else {
-                        s.requested_block = Some(sha);
-                        s.sent_command = Some(LedgerToHostCmd::GetChunk);
-                        let mut io = s.comm.borrow_mut();
-                        io.append(&[LedgerToHostCmd::GetChunk as u8]);
-                        io.append(&sha);
-                        Poll::Pending
+                        Ok(HostToLedgerCmd::GetChunkResponseFailure) => {
+                            Poll::Ready(Err(ChunkNotFound))
+                        }
+                        _ => {
+                            error!("Reached unreachable");
+                            panic!("Unreachable: should be filtered out by protocol rules before this point.")
+                        }
                     }
+                } else {
+                    s.requested_block = Some(sha);
+                    s.sent_command = Some(LedgerToHostCmd::GetChunk);
+                    let mut io = s.comm.borrow_mut();
+                    io.append(&[LedgerToHostCmd::GetChunk as u8]);
+                    io.append(&sha);
+                    Poll::Pending
                 }
             }
             Err(_) => Poll::Pending,
