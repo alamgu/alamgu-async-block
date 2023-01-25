@@ -119,24 +119,28 @@
 #![no_std]
 #![allow(incomplete_features)]
 #![feature(type_alias_impl_trait)]
-
 #![feature(cfg_version)]
-#![cfg_attr(all(target_family="bolos", not(version("1.64"))), feature(future_poll_fn))]
-#![cfg_attr(all(target_family="bolos", not(version("1.65"))), feature(generic_associated_types))]
+#![cfg_attr(
+    all(target_family = "bolos", not(version("1.64"))),
+    feature(future_poll_fn)
+)]
+#![cfg_attr(
+    all(target_family = "bolos", not(version("1.65"))),
+    feature(generic_associated_types)
+)]
 
-use ledger_log::*;
-use nanos_sdk::io;
 use arrayvec::ArrayVec;
 use core::future::Future;
+use ledger_log::*;
+use ledger_parser_combinators::async_parser::{reject, Readable, UnwrappableReadable};
 use nanos_sdk::bindings::*;
-use ledger_parser_combinators::async_parser::{Readable, UnwrappableReadable, reject};
+use nanos_sdk::io;
 
-use nanos_sdk::io::Reply;
+use core::cell::{Ref, RefCell, RefMut};
 use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::task::*;
-use core::cell::{RefCell, Ref, RefMut}; //, BorrowMutError};
-
+use nanos_sdk::io::Reply; //, BorrowMutError};
 
 #[repr(u8)]
 #[derive(Debug)]
@@ -145,7 +149,7 @@ enum HostToLedgerCmd {
     GetChunkResponseSuccess = 1,
     GetChunkResponseFailure = 2,
     PutChunkResponse = 3,
-    ResultAccumulatingResponse = 4
+    ResultAccumulatingResponse = 4,
 }
 
 impl TryFrom<u8> for HostToLedgerCmd {
@@ -168,12 +172,11 @@ pub enum LedgerToHostCmd {
     ResultAccumulating = 0, // Not used yet in this app.
     ResultFinal = 1,
     GetChunk = 2,
-    PutChunk = 3
+    PutChunk = 3,
 }
 
 const HASH_LEN: usize = 32;
 pub type SHA256 = [u8; HASH_LEN];
-
 
 #[derive(Debug)]
 pub struct ChunkNotFound;
@@ -181,113 +184,143 @@ pub struct ChunkNotFound;
 pub struct HostIOState {
     pub comm: &'static RefCell<io::Comm>,
     pub requested_block: Option<SHA256>,
-    pub sent_command: Option<LedgerToHostCmd>
+    pub sent_command: Option<LedgerToHostCmd>,
 }
 
 impl core::fmt::Debug for HostIOState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "HostIOState {{ comm: {}, requested_block: {:?}, sent_command: {:?} }}", if self.comm.try_borrow().is_ok() {"not borrowed"} else {"borrowed"}, self.requested_block, self.sent_command)
+        write!(
+            f,
+            "HostIOState {{ comm: {}, requested_block: {:?}, sent_command: {:?} }}",
+            if self.comm.try_borrow().is_ok() {
+                "not borrowed"
+            } else {
+                "borrowed"
+            },
+            self.requested_block,
+            self.sent_command
+        )
     }
 }
 
-#[derive(PartialEq,Debug)]
+#[derive(PartialEq, Debug)]
 pub enum AsyncTrampolineResult {
     NothingPending,
     Pending,
-    Resolved
+    Resolved,
 }
 
 pub trait AsyncTrampoline {
     fn handle_command(&mut self) -> AsyncTrampolineResult;
 }
 impl AsyncTrampoline for () {
-    fn handle_command(&mut self) -> AsyncTrampolineResult { AsyncTrampolineResult::NothingPending }
+    fn handle_command(&mut self) -> AsyncTrampolineResult {
+        AsyncTrampolineResult::NothingPending
+    }
 }
-
 
 #[derive(Copy, Clone, Debug)]
 pub struct HostIO(pub &'static RefCell<HostIOState>);
 
 impl HostIO {
-
     /// Grab a mutable reference to the [io::Comm] object, to do some direct stuff with.
     pub fn get_comm<'a>(self) -> Result<RefMut<'a, io::Comm>, Reply> {
-        self.0.try_borrow_mut().or(Err(io::StatusWords::Unknown))?.comm.try_borrow_mut().or(Err(io::StatusWords::Unknown.into()))
+        self.0
+            .try_borrow_mut()
+            .or(Err(io::StatusWords::Unknown))?
+            .comm
+            .try_borrow_mut()
+            .or(Err(io::StatusWords::Unknown.into()))
     }
 
     /// Get a chunk, identified by SHA256 hash of it's contents, from the host.
-    pub fn get_chunk(self, sha: SHA256) -> impl Future<Output = Result<Ref<'static, [u8]>, ChunkNotFound>> {
-        core::future::poll_fn(move |_| {
-            match self.0.try_borrow_mut() {
-                Ok(ref mut s) => {
-                    if s.sent_command.is_some() {
-                        Poll::Pending
-                    } else {
-                        if s.requested_block == Some(sha) {
-                            match s.comm.borrow().get_data().ok().unwrap()[0].try_into() {
-                                Ok(HostToLedgerCmd::GetChunkResponseSuccess) => {
-                                    Poll::Ready(Ok(Ref::map(s.comm.borrow(), |comm| &comm.get_data().ok().unwrap()[1..])))
-                                }
-                                Ok(HostToLedgerCmd::GetChunkResponseFailure) => Poll::Ready(Err(ChunkNotFound)),
-                                _ => {
-                                    error!("Reached unreachable");
-                                    panic!("Unreachable: should be filtered out by protocol rules before this point.")
-                                }
+    pub fn get_chunk(
+        self,
+        sha: SHA256,
+    ) -> impl Future<Output = Result<Ref<'static, [u8]>, ChunkNotFound>> {
+        core::future::poll_fn(move |_| match self.0.try_borrow_mut() {
+            Ok(ref mut s) => {
+                if s.sent_command.is_some() {
+                    Poll::Pending
+                } else {
+                    if s.requested_block == Some(sha) {
+                        match s.comm.borrow().get_data().ok().unwrap()[0].try_into() {
+                            Ok(HostToLedgerCmd::GetChunkResponseSuccess) => {
+                                Poll::Ready(Ok(Ref::map(s.comm.borrow(), |comm| {
+                                    &comm.get_data().ok().unwrap()[1..]
+                                })))
                             }
-                        } else {
-                            s.requested_block = Some(sha);
-                            s.sent_command = Some(LedgerToHostCmd::GetChunk);
-                            let mut io = s.comm.borrow_mut();
-                            io.append(&[LedgerToHostCmd::GetChunk as u8]);
-                            io.append(&sha);
-                            Poll::Pending
+                            Ok(HostToLedgerCmd::GetChunkResponseFailure) => {
+                                Poll::Ready(Err(ChunkNotFound))
+                            }
+                            _ => {
+                                error!("Reached unreachable");
+                                panic!("Unreachable: should be filtered out by protocol rules before this point.")
+                            }
                         }
+                    } else {
+                        s.requested_block = Some(sha);
+                        s.sent_command = Some(LedgerToHostCmd::GetChunk);
+                        let mut io = s.comm.borrow_mut();
+                        io.append(&[LedgerToHostCmd::GetChunk as u8]);
+                        io.append(&sha);
+                        Poll::Pending
                     }
                 }
-                Err(_) => {
-                    Poll::Pending
-                }
             }
+            Err(_) => Poll::Pending,
         })
     }
 
-    fn send_write_command<'a: 'c, 'b: 'c, 'c>(self, cmd: LedgerToHostCmd, data: &'b [u8]) -> impl 'c + Future<Output = ()> {
-        core::future::poll_fn(move |_| {
-            match self.0.try_borrow_mut() {
-                Ok(ref mut s) => {
-                    if s.sent_command.is_some() {
-                        Poll::Pending
-                    } else {
-                        s.requested_block = None;
-                        s.sent_command = Some(cmd);
-                        let mut io = s.comm.borrow_mut();
-                        io.append(&[cmd as u8]);
-                        io.append(data);
-                        Poll::Pending
-                    }
+    fn send_write_command<'a: 'c, 'b: 'c, 'c>(
+        self,
+        cmd: LedgerToHostCmd,
+        data: &'b [u8],
+    ) -> impl 'c + Future<Output = ()> {
+        core::future::poll_fn(move |_| match self.0.try_borrow_mut() {
+            Ok(ref mut s) => {
+                if s.sent_command.is_some() {
+                    Poll::Pending
+                } else {
+                    s.requested_block = None;
+                    s.sent_command = Some(cmd);
+                    let mut io = s.comm.borrow_mut();
+                    io.append(&[cmd as u8]);
+                    io.append(data);
+                    Poll::Pending
                 }
-                Err(_) => Poll::Pending,
             }
+            Err(_) => Poll::Pending,
         })
     }
 
     /// Write a chunk to the host, returning the SHA256 of it's contents, used as an address for a
     /// future get_chunk.
-    pub fn put_chunk<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = SHA256> {
+    pub fn put_chunk<'a: 'c, 'b: 'c, 'c>(
+        self,
+        chunk: &'b [u8],
+    ) -> impl 'c + Future<Output = SHA256> {
         async move {
-            self.send_write_command(LedgerToHostCmd::PutChunk, chunk).await;
+            self.send_write_command(LedgerToHostCmd::PutChunk, chunk)
+                .await;
             sha256_hash(chunk)
         }
     }
 
     /// Write a piece of output to the host, but don't declare that we are done; the host will
     /// return to the ledger to get more.
-    pub fn result_accumulating<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = ()> {
+    pub fn result_accumulating<'a: 'c, 'b: 'c, 'c>(
+        self,
+        chunk: &'b [u8],
+    ) -> impl 'c + Future<Output = ()> {
         self.send_write_command(LedgerToHostCmd::ResultAccumulating, chunk)
     }
     /// Write the final piece of output to the host; after this, we're done and the host does not
     /// contact us again on this subject.
-    pub fn result_final<'a: 'c, 'b: 'c, 'c>(self, chunk: &'b [u8]) -> impl 'c + Future<Output = ()> {
+    pub fn result_final<'a: 'c, 'b: 'c, 'c>(
+        self,
+        chunk: &'b [u8],
+    ) -> impl 'c + Future<Output = ()> {
         self.send_write_command(LedgerToHostCmd::ResultFinal, chunk)
     }
 }
@@ -298,7 +331,7 @@ impl HostIO {
 pub struct ByteStream {
     host_io: HostIO,
     current_chunk: SHA256,
-    current_offset: usize
+    current_offset: usize,
 }
 
 impl Readable for ByteStream {
@@ -308,11 +341,14 @@ impl Readable for ByteStream {
             let mut buffer = ArrayVec::<u8, N>::new();
             while !buffer.is_full() {
                 if self.current_chunk == [0; 32] {
-                    let _ : () = reject().await;
+                    let _: () = reject().await;
                 }
                 let chunk_res = self.host_io.get_chunk(self.current_chunk).await;
-                let chunk = match chunk_res { Ok(a) => a, Err(_) => reject().await, };
-                let avail = &chunk[self.current_offset+HASH_LEN .. ];
+                let chunk = match chunk_res {
+                    Ok(a) => a,
+                    Err(_) => reject().await,
+                };
+                let avail = &chunk[self.current_offset + HASH_LEN..];
                 let consuming = core::cmp::min(avail.len(), buffer.remaining_capacity());
                 buffer.try_extend_from_slice(&avail[0..consuming]).ok();
                 self.current_offset += consuming;
@@ -338,7 +374,7 @@ impl UnwrappableReadable for ByteStream {
 // refer to the relevant AsyncAPDU.
 pub const MAX_PARAMS: usize = 2;
 
-pub trait AsyncAPDU : 'static + Sized {
+pub trait AsyncAPDU: 'static + Sized {
     // const MAX_PARAMS: usize;
     type State<'c>: Future<Output = ()>;
     // fn run<'c>(self, io: HostIO, input: ArrayVec<ByteStream, { Self::MAX_PARAMS }>) -> Self::State<'c>;
@@ -346,20 +382,23 @@ pub trait AsyncAPDU : 'static + Sized {
 }
 
 pub trait StateHolderCtr {
-    type StateCtr<'a> : Default;
+    type StateCtr<'a>: Default;
 }
 
-pub trait AsyncAPDUStated<StateHolderT: 'static + StateHolderCtr> : AsyncAPDU {
+pub trait AsyncAPDUStated<StateHolderT: 'static + StateHolderCtr>: AsyncAPDU {
     fn init<'a, 'b: 'a>(
         self,
         s: &mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>,
         io: HostIO,
-        input: ArrayVec<ByteStream, MAX_PARAMS>
+        input: ArrayVec<ByteStream, MAX_PARAMS>,
     ) -> ();
 
     // fn get<'a, 'b>(self, s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>) -> Option<&'b mut core::pin::Pin<&'a mut Self::State<'a>>>;
 
-    fn poll<'a, 'b>(self, s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>) -> core::task::Poll<()>;
+    fn poll<'a, 'b>(
+        self,
+        s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>,
+    ) -> core::task::Poll<()>;
 
     /* {
         let waker = unsafe { Waker::from_raw(RawWaker::new(&(), &RAW_WAKER_VTABLE)) };
@@ -371,59 +410,86 @@ pub trait AsyncAPDUStated<StateHolderT: 'static + StateHolderCtr> : AsyncAPDU {
     }*/
 }
 
-pub static RAW_WAKER_VTABLE : RawWakerVTable = RawWakerVTable::new(|a| RawWaker::new(a, &RAW_WAKER_VTABLE), |_| {}, |_| {}, |_| {});
+pub static RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+    |a| RawWaker::new(a, &RAW_WAKER_VTABLE),
+    |_| {},
+    |_| {},
+    |_| {},
+);
 
 /// Main entry point: run an AsyncAPDU given an input.
 #[inline(never)]
-pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 'a + AsyncAPDUStated<StateHolderT> + Copy, T: AsyncTrampoline>     (
+pub fn poll_apdu_handler<
+    'a: 'b,
+    'b,
+    StateHolderT: 'static + StateHolderCtr,
+    A: 'a + AsyncAPDUStated<StateHolderT> + Copy,
+    T: AsyncTrampoline,
+>(
     s: &'b mut core::pin::Pin<&'a mut StateHolderT::StateCtr<'a>>,
     io: HostIO,
     trampoline: &mut T,
-    apdu: A
-) -> Result<(), Reply> where [(); MAX_PARAMS]: Sized {
+    apdu: A,
+) -> Result<(), Reply>
+where
+    [(); MAX_PARAMS]: Sized,
+{
     let command = io.get_comm()?.get_data()?[0].try_into();
     match command {
         Ok(HostToLedgerCmd::START) => {
-            call_me_maybe( || {
-            let mut params = ArrayVec::<ByteStream, MAX_PARAMS>::new();
-            for param in io.get_comm().ok()?.get_data().ok()?[1..].chunks_exact(HASH_LEN) {
-                params.try_push(ByteStream {
-                    host_io: io,
-                    current_chunk: param.try_into().or(Err(io::StatusWords::Unknown)).ok()?,
-                    current_offset: 0
-                }).ok()?;
-            }
-            apdu.init(s, io, params);
-            Some(())
-            } ).ok_or(io::StatusWords::Unknown)?;
+            call_me_maybe(|| {
+                let mut params = ArrayVec::<ByteStream, MAX_PARAMS>::new();
+                for param in io.get_comm().ok()?.get_data().ok()?[1..].chunks_exact(HASH_LEN) {
+                    params
+                        .try_push(ByteStream {
+                            host_io: io,
+                            current_chunk: param
+                                .try_into()
+                                .or(Err(io::StatusWords::Unknown))
+                                .ok()?,
+                            current_offset: 0,
+                        })
+                        .ok()?;
+                }
+                apdu.init(s, io, params);
+                Some(())
+            })
+            .ok_or(io::StatusWords::Unknown)?;
         }
-        Ok(HostToLedgerCmd::GetChunkResponseSuccess) if io.0.borrow().sent_command == Some(LedgerToHostCmd::GetChunk) => {
-            if io.0.borrow().comm.borrow().get_data()?.len() < HASH_LEN+1 { return Err(io::StatusWords::Unknown.into()); }
+        Ok(HostToLedgerCmd::GetChunkResponseSuccess)
+            if io.0.borrow().sent_command == Some(LedgerToHostCmd::GetChunk) =>
+        {
+            if io.0.borrow().comm.borrow().get_data()?.len() < HASH_LEN + 1 {
+                return Err(io::StatusWords::Unknown.into());
+            }
 
             // Check the hash, so the host can't lie.
-            call_me_maybe( || {
+            call_me_maybe(|| {
                 let hashed = sha256_hash(&io.0.borrow().comm.borrow().get_data().ok()?[1..]);
-                
+
                 if Some(hashed) != io.0.borrow().requested_block {
                     None
                 } else {
                     Some(())
                 }
-            }).ok_or(io::StatusWords::Unknown)?;
+            })
+            .ok_or(io::StatusWords::Unknown)?;
         }
         // Only need to check that these are responses to things we did; there's no data to
         // validate.
-        Ok(HostToLedgerCmd::GetChunkResponseFailure) if io.0.borrow().sent_command == Some(LedgerToHostCmd::GetChunk) => { }
-        Ok(HostToLedgerCmd::PutChunkResponse) if io.0.borrow().sent_command == Some(LedgerToHostCmd::PutChunk) => { }
-        Ok(HostToLedgerCmd::ResultAccumulatingResponse) if io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultAccumulating) => { }
+        Ok(HostToLedgerCmd::GetChunkResponseFailure)
+            if io.0.borrow().sent_command == Some(LedgerToHostCmd::GetChunk) => {}
+        Ok(HostToLedgerCmd::PutChunkResponse)
+            if io.0.borrow().sent_command == Some(LedgerToHostCmd::PutChunk) => {}
+        Ok(HostToLedgerCmd::ResultAccumulatingResponse)
+            if io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultAccumulating) => {}
         // Reject otherwise.
         _ => Err(io::StatusWords::Unknown)?,
     }
 
-    
     // We use this to wait if we've already got a command to send, so clear it now that we're
     // in a validated state.
-    io.0.borrow_mut().sent_command=None;
+    io.0.borrow_mut().sent_command = None;
 
     loop {
         // And run the future for this APDU.
@@ -440,7 +506,7 @@ pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 
                         // This is the end of the current APDU, so reset state
                         s.set(core::default::Default::default());
                     }
-                    return Ok(())
+                    return Ok(());
                 } else if trampoline_res == AsyncTrampolineResult::Resolved {
                 } else {
                     error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
@@ -453,7 +519,7 @@ pub fn poll_apdu_handler<'a: 'b, 'b, StateHolderT: 'static + StateHolderCtr, A: 
                     Err(io::StatusWords::Unknown)?
                 }
                 s.set(core::default::Default::default());
-                return Ok(())
+                return Ok(());
             }
         }
     }
@@ -478,4 +544,3 @@ fn sha256_hash(data: &[u8]) -> [u8; 32] {
 pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
     f()
 }
-
