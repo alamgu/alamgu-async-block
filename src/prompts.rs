@@ -1,5 +1,6 @@
 use crate::*;
 use arrayvec::ArrayString;
+use core::str::from_utf8;
 use core::fmt::{Arguments, Error, Write};
 
 use nanos_sdk::buttons::*;
@@ -113,18 +114,19 @@ impl PromptQueue {
                     }
                     #[cfg(not(target_os = "nanos"))]
                     {
-                        current_body.as_str().get(0..16).map(|body| {
+                        let mut iter = current_body.as_bytes().chunks(16);
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
                             Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(body)).paint()
-                        });
-                        current_body.as_str().get(16..32).map(|body| {
+                        };
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
                             Bagl::LABELLINE(LabelLine::new().pos(0, 37).text(body)).paint()
-                        });
-                        current_body.as_str().get(32..48).map(|body| {
+                        };
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
                             Bagl::LABELLINE(LabelLine::new().pos(0, 49).text(body)).paint()
-                        });
-                        current_body.as_str().get(48..64).map(|body| {
+                        };
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
                             Bagl::LABELLINE(LabelLine::new().pos(0, 61).text(body)).paint()
-                        });
+                        };
                     }
                     if backward.prev != [0; 32] {
                         LEFT_ARROW.paint();
