@@ -189,7 +189,9 @@ impl PromptQueue {
                         (PromptingState::Cancel, ButtonEvent::LeftButtonRelease) => {
                             state = PromptingState::Confirm;
                         }
-                        _ => {}
+                        _ => {
+                            continue;
+                        }
                     }
                     break;
                 } else {
