@@ -5,6 +5,8 @@ use core::str::from_utf8;
 
 use nanos_sdk::buttons::*;
 use nanos_ui::bagls::*;
+use nanos_ui::layout::*;
+use nanos_ui::ui::clear_screen;
 
 #[derive(Clone, Debug)]
 pub struct PromptQueue {
@@ -116,45 +118,44 @@ impl PromptQueue {
         let mut buttons = Default::default();
 
         loop {
+            clear_screen();
             // Display
             let (current_title, current_body) = title_and_body;
             match state {
                 PromptingState::Prompts => {
-                    Bagl::LABELLINE(LabelLine::new().pos(0, 10).text(current_title.as_str()))
-                        .display();
+                    current_title.as_str().place(Location::Top, Layout::Centered, false);
                     #[cfg(target_os = "nanos")]
                     {
-                        Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(current_body.as_str()))
-                            .paint();
+                        current_body.as_str().place(Location::Custom(15), Layout::Centered, false);
                     }
                     #[cfg(not(target_os = "nanos"))]
                     {
                         let mut iter = current_body.as_bytes().chunks(16);
                         if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(body)).paint()
+                            body.place(Location::Custom(16), Layout::Centered, false);
                         };
                         if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 40).text(body)).paint()
+                            body.place(Location::Custom(31), Layout::Centered, false);
                         };
                         if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 55).text(body)).paint()
+                            body.place(Location::Custom(46), Layout::Centered, false);
                         };
                     }
                     if backward.prev != [0; HASH_LENGTH] {
-                        LEFT_ARROW.paint();
+                        LEFT_ARROW.instant_display();
                     }
-                    RIGHT_ARROW.paint();
+                    RIGHT_ARROW.instant_display();
                 }
                 PromptingState::Confirm => {
-                    Bagl::ICON(Icon::new(Icons::CheckBadge).pos(18, 12)).display();
-                    Bagl::LABELLINE(LabelLine::new().text("Confirm").pos(0, 20)).paint();
-                    LEFT_ARROW.paint();
-                    RIGHT_ARROW.paint();
+                    CHECKMARK_ICON.set_x(18).display();
+                    "Confirm".place(Location::Middle, Layout::Centered, false);
+                    LEFT_ARROW.instant_display();
+                    RIGHT_ARROW.instant_display();
                 }
                 PromptingState::Cancel => {
-                    Bagl::ICON(Icon::new(Icons::CrossBadge).pos(18, 12)).display();
-                    Bagl::LABELLINE(LabelLine::new().text("Cancel").pos(0, 20)).paint();
-                    LEFT_ARROW.paint();
+                    CROSS_ICON.set_x(18).display();
+                    "Reject".place(Location::Middle, Layout::Centered, false);
+                    LEFT_ARROW.instant_display();
                 }
             }
             // Handle buttons
