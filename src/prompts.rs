@@ -1,9 +1,12 @@
 use crate::*;
 use arrayvec::ArrayString;
 use core::fmt::{Arguments, Error, Write};
+use core::str::from_utf8;
 
 use nanos_sdk::buttons::*;
 use nanos_ui::bagls::*;
+use nanos_ui::layout::*;
+use nanos_ui::ui::clear_screen;
 
 #[derive(Clone, Debug)]
 pub struct PromptQueue {
@@ -11,13 +14,18 @@ pub struct PromptQueue {
     prev: SHA256Sum,
 }
 
+const HASH_LENGTH: usize = 32;
+
+const PROMPT_TITLE_LENGTH: usize = 17;
+
 #[cfg(target_os = "nanos")]
 const PROMPT_CHUNK_LENGTH: usize = 16;
 
 #[cfg(not(target_os = "nanos"))]
-const PROMPT_CHUNK_LENGTH: usize = 64;
+const PROMPT_CHUNK_LENGTH: usize = 48;
 
-type PromptBuffer = ArrayVec<u8, { 32 + 19 + PROMPT_CHUNK_LENGTH }>;
+// The two bytes are to store the actual "length" of title and chunk, respectively
+type PromptBuffer = ArrayVec<u8, { HASH_LENGTH + 2 + PROMPT_TITLE_LENGTH + PROMPT_CHUNK_LENGTH }>;
 
 #[derive(Debug, PartialEq)]
 pub struct PromptingError;
@@ -45,22 +53,32 @@ impl From<ChunkNotFound> for PromptingError {
 
 impl PromptQueue {
     pub fn new(io: HostIO) -> PromptQueue {
-        PromptQueue { io, prev: [0; 32] }
+        PromptQueue {
+            io,
+            prev: [0; HASH_LENGTH],
+        }
     }
 
     async fn pop(
         &mut self,
-    ) -> Result<Option<(ArrayString<16>, ArrayString<PROMPT_CHUNK_LENGTH>)>, PromptingError> {
-        if self.prev == [0; 32] {
+    ) -> Result<
+        Option<(
+            ArrayString<PROMPT_TITLE_LENGTH>,
+            ArrayString<PROMPT_CHUNK_LENGTH>,
+        )>,
+        PromptingError,
+    > {
+        if self.prev == [0; HASH_LENGTH] {
             return Ok(None);
         }
         let chunk = PromptBuffer::try_from(self.io.get_chunk(self.prev).await?.as_ref())?;
-        self.prev[0..32].copy_from_slice(&chunk[0..32]);
-        let title =
-            ArrayString::try_from(core::str::from_utf8(&chunk[34..34 + chunk[32] as usize])?)?;
-        let body = ArrayString::try_from(core::str::from_utf8(
-            &chunk[34 + chunk[32] as usize..(34 + chunk[32] + chunk[33]) as usize],
-        )?)?;
+        self.prev[0..HASH_LENGTH].copy_from_slice(&chunk[0..HASH_LENGTH]);
+        let title_len = chunk[32] as usize;
+        let title_end = 34 + title_len;
+        let body_len = chunk[33] as usize;
+        let body_end = title_end + body_len;
+        let title = ArrayString::try_from(core::str::from_utf8(&chunk[34..title_end])?)?;
+        let body = ArrayString::try_from(core::str::from_utf8(&chunk[title_end..body_end])?)?;
         Ok(Some((title, body)))
     }
 
@@ -82,7 +100,7 @@ impl PromptQueue {
     }
 
     pub async fn show(&mut self) -> Result<bool, PromptingError> {
-        if self.prev == [0; 32] {
+        if self.prev == [0; HASH_LENGTH] {
             return Err(PromptingError);
         } // No showing empty PromptQueues.
 
@@ -100,47 +118,44 @@ impl PromptQueue {
         let mut buttons = Default::default();
 
         loop {
+            clear_screen();
             // Display
             let (current_title, current_body) = title_and_body;
             match state {
                 PromptingState::Prompts => {
-                    Bagl::LABELLINE(LabelLine::new().pos(0, 10).text(current_title.as_str()))
-                        .display();
+                    current_title.as_str().place(Location::Top, Layout::Centered, false);
                     #[cfg(target_os = "nanos")]
                     {
-                        Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(current_body.as_str()))
-                            .paint();
+                        current_body.as_str().place(Location::Custom(15), Layout::Centered, false);
                     }
                     #[cfg(not(target_os = "nanos"))]
                     {
-                        current_body.as_str().get(0..16).map(|body| {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(body)).paint()
-                        });
-                        current_body.as_str().get(16..32).map(|body| {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 37).text(body)).paint()
-                        });
-                        current_body.as_str().get(32..48).map(|body| {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 49).text(body)).paint()
-                        });
-                        current_body.as_str().get(48..64).map(|body| {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 61).text(body)).paint()
-                        });
+                        let mut iter = current_body.as_bytes().chunks(16);
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
+                            body.place(Location::Custom(16), Layout::Centered, false);
+                        };
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
+                            body.place(Location::Custom(31), Layout::Centered, false);
+                        };
+                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
+                            body.place(Location::Custom(46), Layout::Centered, false);
+                        };
                     }
-                    if backward.prev != [0; 32] {
-                        LEFT_ARROW.paint();
+                    if backward.prev != [0; HASH_LENGTH] {
+                        LEFT_ARROW.instant_display();
                     }
-                    RIGHT_ARROW.paint();
+                    RIGHT_ARROW.instant_display();
                 }
                 PromptingState::Confirm => {
-                    Bagl::ICON(Icon::new(Icons::CheckBadge).pos(18, 12)).display();
-                    Bagl::LABELLINE(LabelLine::new().text("Confirm").pos(0, 20)).paint();
-                    LEFT_ARROW.paint();
-                    RIGHT_ARROW.paint();
+                    CHECKMARK_ICON.set_x(18).display();
+                    "Confirm".place(Location::Middle, Layout::Centered, false);
+                    LEFT_ARROW.instant_display();
+                    RIGHT_ARROW.instant_display();
                 }
                 PromptingState::Cancel => {
-                    Bagl::ICON(Icon::new(Icons::CrossBadge).pos(18, 12)).display();
-                    Bagl::LABELLINE(LabelLine::new().text("Cancel").pos(0, 20)).paint();
-                    LEFT_ARROW.paint();
+                    CROSS_ICON.set_x(18).display();
+                    "Reject".place(Location::Middle, Layout::Centered, false);
+                    LEFT_ARROW.instant_display();
                 }
             }
             // Handle buttons
@@ -155,7 +170,7 @@ impl PromptQueue {
                     // {
                     match (state.clone(), buttons_evt) {
                         (PromptingState::Prompts, ButtonEvent::LeftButtonRelease) => {
-                            if backward.prev != [0; 32] {
+                            if backward.prev != [0; HASH_LENGTH] {
                                 forward
                                     .add_prompt_chunk(&current_title, &current_body)
                                     .await?;
@@ -163,7 +178,7 @@ impl PromptQueue {
                             }
                         }
                         (PromptingState::Prompts, ButtonEvent::RightButtonRelease) => {
-                            if forward.prev != [0; 32] {
+                            if forward.prev != [0; HASH_LENGTH] {
                                 backward
                                     .add_prompt_chunk(&current_title, &current_body)
                                     .await?;
@@ -187,7 +202,9 @@ impl PromptQueue {
                         (PromptingState::Cancel, ButtonEvent::LeftButtonRelease) => {
                             state = PromptingState::Confirm;
                         }
-                        _ => {}
+                        _ => {
+                            continue;
+                        }
                     }
                     break;
                 } else {
@@ -197,7 +214,7 @@ impl PromptQueue {
     }
 
     async fn add_prompt_chunk(&mut self, title: &str, segment: &str) -> Result<(), PromptingError> {
-        if title.len() > 17 {
+        if title.len() > PROMPT_TITLE_LENGTH {
             return Err(PromptingError);
         }
         if segment.len() > PROMPT_CHUNK_LENGTH {
