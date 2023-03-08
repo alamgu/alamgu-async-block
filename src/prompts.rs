@@ -1,7 +1,7 @@
 use crate::*;
 use arrayvec::ArrayString;
-use core::str::from_utf8;
 use core::fmt::{Arguments, Error, Write};
+use core::str::from_utf8;
 
 use nanos_sdk::buttons::*;
 use nanos_ui::bagls::*;
@@ -12,13 +12,18 @@ pub struct PromptQueue {
     prev: SHA256Sum,
 }
 
+const HASH_LENGTH: usize = 32;
+
+const PROMPT_TITLE_LENGTH: usize = 17;
+
 #[cfg(target_os = "nanos")]
 const PROMPT_CHUNK_LENGTH: usize = 16;
 
 #[cfg(not(target_os = "nanos"))]
 const PROMPT_CHUNK_LENGTH: usize = 64;
 
-type PromptBuffer = ArrayVec<u8, { 32 + 19 + PROMPT_CHUNK_LENGTH }>;
+// The two bytes are to store the actual "length" of title and chunk, respectively
+type PromptBuffer = ArrayVec<u8, { HASH_LENGTH + 2 + PROMPT_TITLE_LENGTH + PROMPT_CHUNK_LENGTH }>;
 
 #[derive(Debug, PartialEq)]
 pub struct PromptingError;
@@ -46,22 +51,32 @@ impl From<ChunkNotFound> for PromptingError {
 
 impl PromptQueue {
     pub fn new(io: HostIO) -> PromptQueue {
-        PromptQueue { io, prev: [0; 32] }
+        PromptQueue {
+            io,
+            prev: [0; HASH_LENGTH],
+        }
     }
 
     async fn pop(
         &mut self,
-    ) -> Result<Option<(ArrayString<16>, ArrayString<PROMPT_CHUNK_LENGTH>)>, PromptingError> {
-        if self.prev == [0; 32] {
+    ) -> Result<
+        Option<(
+            ArrayString<PROMPT_TITLE_LENGTH>,
+            ArrayString<PROMPT_CHUNK_LENGTH>,
+        )>,
+        PromptingError,
+    > {
+        if self.prev == [0; HASH_LENGTH] {
             return Ok(None);
         }
         let chunk = PromptBuffer::try_from(self.io.get_chunk(self.prev).await?.as_ref())?;
-        self.prev[0..32].copy_from_slice(&chunk[0..32]);
-        let title =
-            ArrayString::try_from(core::str::from_utf8(&chunk[34..34 + chunk[32] as usize])?)?;
-        let body = ArrayString::try_from(core::str::from_utf8(
-            &chunk[34 + chunk[32] as usize..(34 + chunk[32] + chunk[33]) as usize],
-        )?)?;
+        self.prev[0..HASH_LENGTH].copy_from_slice(&chunk[0..HASH_LENGTH]);
+        let title_len = chunk[32] as usize;
+        let title_end = 34 + title_len;
+        let body_len = chunk[33] as usize;
+        let body_end = title_end + body_len;
+        let title = ArrayString::try_from(core::str::from_utf8(&chunk[34..title_end])?)?;
+        let body = ArrayString::try_from(core::str::from_utf8(&chunk[title_end..body_end])?)?;
         Ok(Some((title, body)))
     }
 
@@ -83,7 +98,7 @@ impl PromptQueue {
     }
 
     pub async fn show(&mut self) -> Result<bool, PromptingError> {
-        if self.prev == [0; 32] {
+        if self.prev == [0; HASH_LENGTH] {
             return Err(PromptingError);
         } // No showing empty PromptQueues.
 
@@ -128,7 +143,7 @@ impl PromptQueue {
                             Bagl::LABELLINE(LabelLine::new().pos(0, 61).text(body)).paint()
                         };
                     }
-                    if backward.prev != [0; 32] {
+                    if backward.prev != [0; HASH_LENGTH] {
                         LEFT_ARROW.paint();
                     }
                     RIGHT_ARROW.paint();
@@ -157,7 +172,7 @@ impl PromptQueue {
                     // {
                     match (state.clone(), buttons_evt) {
                         (PromptingState::Prompts, ButtonEvent::LeftButtonRelease) => {
-                            if backward.prev != [0; 32] {
+                            if backward.prev != [0; HASH_LENGTH] {
                                 forward
                                     .add_prompt_chunk(&current_title, &current_body)
                                     .await?;
@@ -165,7 +180,7 @@ impl PromptQueue {
                             }
                         }
                         (PromptingState::Prompts, ButtonEvent::RightButtonRelease) => {
-                            if forward.prev != [0; 32] {
+                            if forward.prev != [0; HASH_LENGTH] {
                                 backward
                                     .add_prompt_chunk(&current_title, &current_body)
                                     .await?;
@@ -201,7 +216,7 @@ impl PromptQueue {
     }
 
     async fn add_prompt_chunk(&mut self, title: &str, segment: &str) -> Result<(), PromptingError> {
-        if title.len() > 17 {
+        if title.len() > PROMPT_TITLE_LENGTH {
             return Err(PromptingError);
         }
         if segment.len() > PROMPT_CHUNK_LENGTH {
