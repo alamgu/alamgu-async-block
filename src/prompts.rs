@@ -20,7 +20,7 @@ const PROMPT_TITLE_LENGTH: usize = 17;
 const PROMPT_CHUNK_LENGTH: usize = 16;
 
 #[cfg(not(target_os = "nanos"))]
-const PROMPT_CHUNK_LENGTH: usize = 64;
+const PROMPT_CHUNK_LENGTH: usize = 48;
 
 // The two bytes are to store the actual "length" of title and chunk, respectively
 type PromptBuffer = ArrayVec<u8, { HASH_LENGTH + 2 + PROMPT_TITLE_LENGTH + PROMPT_CHUNK_LENGTH }>;
@@ -134,13 +134,10 @@ impl PromptQueue {
                             Bagl::LABELLINE(LabelLine::new().pos(0, 25).text(body)).paint()
                         };
                         if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 37).text(body)).paint()
+                            Bagl::LABELLINE(LabelLine::new().pos(0, 40).text(body)).paint()
                         };
                         if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 49).text(body)).paint()
-                        };
-                        if let Some(body) = iter.next().map(|s| from_utf8(s).ok()).flatten() {
-                            Bagl::LABELLINE(LabelLine::new().pos(0, 61).text(body)).paint()
+                            Bagl::LABELLINE(LabelLine::new().pos(0, 55).text(body)).paint()
                         };
                     }
                     if backward.prev != [0; HASH_LENGTH] {
