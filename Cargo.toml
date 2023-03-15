@@ -15,7 +15,7 @@ ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-com
 
 [patch."https://github.com/LedgerHQ/ledger-nanos-sdk.git".nanos_sdk]
 git = "https://github.com/alamgu/ledger-nanos-sdk.git"
-branch = "support-nix-or-non-nix-toolchain"
+branch = "relocating-loader-w-fixes"
 [patch."https://github.com/LedgerHQ/ledger-nanos-ui.git".nanos_ui]
 git = "https://github.com/obsidiansystems/ledger-nanos-ui"
-branch = "use-lib-bagl-for-x-and-splus"
+branch = "dn-make-from-pub"
