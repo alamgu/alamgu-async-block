@@ -123,10 +123,14 @@ impl PromptQueue {
             let (current_title, current_body) = title_and_body;
             match state {
                 PromptingState::Prompts => {
-                    current_title.as_str().place(Location::Top, Layout::Centered, false);
+                    current_title
+                        .as_str()
+                        .place(Location::Top, Layout::Centered, false);
                     #[cfg(target_os = "nanos")]
                     {
-                        current_body.as_str().place(Location::Custom(15), Layout::Centered, false);
+                        current_body
+                            .as_str()
+                            .place(Location::Custom(15), Layout::Centered, false);
                     }
                     #[cfg(not(target_os = "nanos"))]
                     {
