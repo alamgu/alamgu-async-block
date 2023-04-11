@@ -339,6 +339,31 @@ impl HostIO {
     }
 }
 
+/// A block must be at least [HASH_LEN] bytes long.
+pub struct Block([u8]);
+
+impl Block {
+    pub fn as_raw_slice(&self) -> &[u8] {
+        let block = self as *const Block as *const [u8];
+        unsafe { &*block }
+    }
+
+    pub fn from_raw_slice(block: &[u8]) -> &Self {
+        let block2 = block as *const [u8] as *const Block;
+        unsafe { &*block2 }
+    }
+
+    /// Panics if block is illegally short
+    pub fn next_block(&self) -> SHA256Sum {
+        self.as_raw_slice()[..HASH_LEN].try_into().unwrap()
+    }
+
+    /// Panics if block is illegally short
+    pub fn data(&self) -> &[u8] {
+        &self.as_raw_slice()[HASH_LEN..]
+    }
+}
+
 /// Concrete implementation of the interface defined by
 /// [ledger_parser_combinators::async_parser::Readable] for the block protocol.
 #[derive(Clone)]
@@ -348,28 +373,54 @@ pub struct ByteStream {
     current_offset: usize,
 }
 
+impl ByteStream {
+    /// Get the current block.
+    fn get_current_block<'a>(&'a mut self) -> impl 'a + Future<Output = Ref<'static, Block>> {
+        async move {
+            if self.current_chunk == [0; 32] {
+                let _: () = reject().await;
+            }
+            let chunk_res = self.host_io.get_chunk(self.current_chunk).await;
+            match chunk_res {
+                Ok(a) => Ref::map(a, Block::from_raw_slice),
+                Err(_) => reject().await,
+            }
+            //return Ref::map(chunk, |r| &r[self.current_offset + HASH_LEN..]);
+        }
+    }
+
+    /// Get the rest of the current block that we have not already processed.
+    ///
+    /// [block] must be the current block.
+    fn slice_from_block<'a, 'b>(&'a mut self, block: &'b Block) -> &'b [u8] {
+        &block.data()[self.current_offset..]
+    }
+
+    /// Consume [consume] bytes from the current block.
+    ///
+    /// [block] must be the current block. [consume] must be less than or equal
+    /// to `self.slice_from_block(block).len()`.
+    fn consume(&mut self, block: &Block, consume: usize) {
+        self.current_offset += consume;
+        debug_assert!(self.current_offset <= block.data().len());
+        if self.current_offset == block.data().len() {
+            self.current_chunk = block.next_block();
+            self.current_offset = 0;
+        }
+    }
+}
+
 impl Readable for ByteStream {
     type OutFut<'a, const N: usize> = impl 'a + core::future::Future<Output = [u8; N]>;
     fn read<'a: 'b, 'b, const N: usize>(&'a mut self) -> Self::OutFut<'b, N> {
         async move {
             let mut buffer = ArrayVec::<u8, N>::new();
             while !buffer.is_full() {
-                if self.current_chunk == [0; 32] {
-                    let _: () = reject().await;
-                }
-                let chunk_res = self.host_io.get_chunk(self.current_chunk).await;
-                let chunk = match chunk_res {
-                    Ok(a) => a,
-                    Err(_) => reject().await,
-                };
-                let avail = &chunk[self.current_offset + HASH_LEN..];
+                let block = self.get_current_block().await;
+                let avail = self.slice_from_block(&block);
                 let consuming = core::cmp::min(avail.len(), buffer.remaining_capacity());
                 buffer.try_extend_from_slice(&avail[0..consuming]).ok();
-                self.current_offset += consuming;
-                if self.current_offset + HASH_LEN == chunk.len() {
-                    self.current_chunk = chunk[0..HASH_LEN].try_into().unwrap();
-                    self.current_offset = 0;
-                }
+                self.consume(&*block, consuming);
             }
             buffer.into_inner().unwrap()
         }
