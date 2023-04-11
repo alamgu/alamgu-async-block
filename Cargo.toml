@@ -13,6 +13,9 @@ nanos_sdk = { git = "https://github.com/LedgerHQ/ledger-nanos-sdk.git" }
 nanos_ui = { git = "https://github.com/LedgerHQ/ledger-nanos-ui.git" }
 ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split-take-2" }
 
+[patch."crates-io".arrayvec]
+git = "https://github.com/obsidiansystems/arrayvec"
+branch = "push-many-from-slice"
 [patch."https://github.com/LedgerHQ/ledger-nanos-sdk.git".nanos_sdk]
 git = "https://github.com/alamgu/ledger-nanos-sdk.git"
 branch = "relocating-loader-w-fixes"

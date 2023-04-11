@@ -425,8 +425,8 @@ impl Readable for ByteStream {
             while !buffer.is_full() {
                 let block = self.get_current_block().await;
                 let avail = self.slice_from_block(&block);
-                let consuming = core::cmp::min(avail.len(), buffer.remaining_capacity());
-                buffer.try_extend_from_slice(&avail[0..consuming]).ok();
+                let remaining = buffer.push_many_from_slice(&avail).len();
+                let consuming = avail.len() - remaining;
                 self.consume(&*block, consuming);
             }
             buffer.into_inner().unwrap()
