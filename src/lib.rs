@@ -67,6 +67,7 @@
 //!
 #![no_std]
 #![feature(type_alias_impl_trait)]
+#![feature(cell_filter_map)]
 #![feature(cfg_version)]
 #![cfg_attr(
     all(target_family = "bolos", not(version("1.64"))),
@@ -348,9 +349,13 @@ impl Block {
         unsafe { &*block }
     }
 
-    pub fn from_raw_slice(block: &[u8]) -> &Self {
-        let block2 = block as *const [u8] as *const Block;
-        unsafe { &*block2 }
+    pub fn from_raw_slice_opt(block: &[u8]) -> Option<&Self> {
+        if block.len() >= HASH_LEN {
+            let block2 = block as *const [u8] as *const Block;
+            Some(unsafe { &*block2 })
+        } else {
+            None
+        }
     }
 
     /// Panics if block is illegally short
@@ -382,10 +387,12 @@ impl ByteStream {
             }
             let chunk_res = self.host_io.get_chunk(self.current_chunk).await;
             match chunk_res {
-                Ok(a) => Ref::map(a, Block::from_raw_slice),
+                Ok(a) => match Ref::filter_map(a, Block::from_raw_slice_opt) {
+                    Ok(r) => r,
+                    Err(_) => reject().await,
+                }
                 Err(_) => reject().await,
             }
-            //return Ref::map(chunk, |r| &r[self.current_offset + HASH_LEN..]);
         }
     }
 
