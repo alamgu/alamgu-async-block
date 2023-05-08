@@ -486,7 +486,6 @@ pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
 pub fn poll_apdu_handlers<
     'a: 'b,
     'b,
-    T: AsyncTrampoline,
     F: Future<Output = ()>,
     Ins,
     A: Fn(HostIO, Ins) -> F,
@@ -494,7 +493,6 @@ pub fn poll_apdu_handlers<
     mut s: core::pin::Pin<&'a mut Option<F>>,
     ins: Ins,
     io: HostIO,
-    mut trampoline: T,
     apdus: A,
 ) -> Result<(), Reply> {
     let command = if io.get_comm()?.get_data()?.len() > 0 {
@@ -549,22 +547,11 @@ pub fn poll_apdu_handlers<
         // And run the future for this APDU.
         match poll_with_trivial_context(s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?) {
             Poll::Pending => {
-                let mut trampoline_res = AsyncTrampolineResult::Pending;
-                let mut did_trampoline = false;
-                // First, clear any trampolines we might have pending
-                while trampoline_res == AsyncTrampolineResult::Pending {
-                    trampoline_res = trampoline.handle_command();
-                    did_trampoline = true;
-                }
                 // Then, check that if we're waiting that we've actually given the host something to do.
-                // We need to not early return here if we ran a trampoline and the command is
-                // ResultFinal, so the future can run to completion.
-                if io.0.borrow().sent_command.is_some()
-                    && !(did_trampoline
-                        && io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultFinal))
+                // In case of ResultFinal allow the Future to run to completion, and reset the state.
+                if io.0.borrow().sent_command != Some(LedgerToHostCmd::ResultFinal)
                 {
                     return Ok(());
-                } else if trampoline_res == AsyncTrampolineResult::Resolved {
                 } else {
                     error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
                     Err(io::StatusWords::Unknown)?
