@@ -67,7 +67,7 @@
 //!
 #![no_std]
 #![feature(type_alias_impl_trait)]
-#![feature(cell_filter_map)]
+#![cfg_attr(not(version("1.63")), feature(cell_filter_map))]
 #![feature(cfg_version)]
 #![cfg_attr(
     all(target_family = "bolos", not(version("1.64"))),
