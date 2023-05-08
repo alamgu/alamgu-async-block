@@ -1,7 +1,6 @@
 use crate::*;
 use arrayvec::ArrayString;
 use core::fmt::{Arguments, Error, Write};
-use core::str::from_utf8;
 
 use nanos_sdk::buttons::*;
 use nanos_ui::bagls::*;
