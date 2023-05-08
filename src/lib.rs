@@ -391,7 +391,7 @@ impl ByteStream {
                 Ok(a) => match Ref::filter_map(a, Block::from_raw_slice_opt) {
                     Ok(r) => r,
                     Err(_) => reject().await,
-                }
+                },
                 Err(_) => reject().await,
             }
         }
@@ -483,13 +483,7 @@ pub fn call_me_maybe<F: FnOnce() -> Option<()>>(f: F) -> Option<()> {
 
 /// Main entry point: run an AsyncAPDU given an input.
 #[inline(never)]
-pub fn poll_apdu_handlers<
-    'a: 'b,
-    'b,
-    F: Future<Output = ()>,
-    Ins,
-    A: Fn(HostIO, Ins) -> F,
->(
+pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO, Ins) -> F>(
     mut s: core::pin::Pin<&'a mut Option<F>>,
     ins: Ins,
     io: HostIO,
@@ -549,8 +543,7 @@ pub fn poll_apdu_handlers<
             Poll::Pending => {
                 // Then, check that if we're waiting that we've actually given the host something to do.
                 // In case of ResultFinal allow the Future to run to completion, and reset the state.
-                if io.0.borrow().sent_command != Some(LedgerToHostCmd::ResultFinal)
-                {
+                if io.0.borrow().sent_command != Some(LedgerToHostCmd::ResultFinal) {
                     return Ok(());
                 } else {
                     error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
