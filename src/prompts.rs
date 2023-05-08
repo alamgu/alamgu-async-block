@@ -86,7 +86,7 @@ impl PromptQueue {
         let mut cursor = self.clone();
         let mut accum = Self::new(self.io);
         while let Some((title, body)) = cursor.pop().await? {
-            accum.add_prompt_chunk(&title, &body).await;
+            accum.add_prompt_chunk(&title, &body).await?;
         }
         Ok(accum)
     }
@@ -94,7 +94,7 @@ impl PromptQueue {
     pub async fn append(&mut self, other: &PromptQueue) -> Result<(), PromptingError> {
         let mut from = other.reverse().await?;
         while let Some((title, body)) = from.pop().await? {
-            self.add_prompt_chunk(&title, &body).await;
+            self.add_prompt_chunk(&title, &body).await?;
         }
         Ok(())
     }
@@ -225,11 +225,11 @@ impl PromptQueue {
             return Err(PromptingError);
         }
         let mut chunk = PromptBuffer::new();
-        chunk.try_extend_from_slice(&self.prev);
+        chunk.try_extend_from_slice(&self.prev)?;
         chunk.push(title.len() as u8);
         chunk.push(segment.len() as u8);
-        chunk.try_extend_from_slice(title.as_bytes()); // .unwrap();
-        chunk.try_extend_from_slice(segment.as_bytes()); // .unwrap();
+        chunk.try_extend_from_slice(title.as_bytes())?;
+        chunk.try_extend_from_slice(segment.as_bytes())?;
         self.prev = self.io.put_chunk(&chunk).await;
         Ok(())
     }
@@ -241,7 +241,7 @@ impl PromptQueue {
     ) -> Result<(), PromptingError> {
         let mut writer = ChunkedWrite::new();
         while !writer.terminated() {
-            core::fmt::write(&mut writer, args);
+            core::fmt::write(&mut writer, args).map_err(|_| PromptingError)?;
             self.add_prompt_chunk(title, writer.get_buffer()).await?;
             writer.advance();
         }
@@ -302,7 +302,6 @@ impl Write for ChunkedWrite {
         self.skip_this_pass =
             core::cmp::max(0, self.skip_this_pass as isize - s.len() as isize) as usize;
 
-        self.buffer.try_push_str(pushed_slice);
-        Ok(())
+        self.buffer.try_push_str(pushed_slice).map_err(|_| Error)
     }
 }
