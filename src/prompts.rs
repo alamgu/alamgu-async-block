@@ -77,8 +77,8 @@ impl PromptQueue {
         let title_end = 34 + title_len;
         let body_len = chunk[33] as usize;
         let body_end = title_end + body_len;
-        let title = ArrayString::try_from(core::str::from_utf8(&chunk[34..title_end])?)?;
-        let body = ArrayString::try_from(core::str::from_utf8(&chunk[title_end..body_end])?)?;
+        let title = ArrayString::try_from(from_utf8(&chunk[34..title_end])?)?;
+        let body = ArrayString::try_from(from_utf8(&chunk[title_end..body_end])?)?;
         Ok(Some((title, body)))
     }
 
