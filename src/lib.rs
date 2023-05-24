@@ -543,7 +543,9 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO,
             Poll::Pending => {
                 // Then, check that if we're waiting that we've actually given the host something to do.
                 // In case of ResultFinal allow the Future to run to completion, and reset the state.
-                if io.0.borrow().sent_command != Some(LedgerToHostCmd::ResultFinal) {
+                if io.0.borrow().sent_command.is_some()
+                    && io.0.borrow().sent_command != Some(LedgerToHostCmd::ResultFinal)
+                {
                     return Ok(());
                 } else {
                     error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
