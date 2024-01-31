@@ -1,6 +1,6 @@
 [package]
 name = "alamgu-async-block"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -9,13 +9,6 @@ edition = "2018"
 arrayvec = { version = "0.7.2", default-features = false }
 ledger-log = { git = "https://github.com/alamgu/ledger-log" }
 pin-project = "1.0.10"
-nanos_sdk = { git = "https://github.com/LedgerHQ/ledger-nanos-sdk.git" }
-nanos_ui = { git = "https://github.com/LedgerHQ/ledger-nanos-ui.git" }
+ledger_device_sdk = "1.4.3"
+ledger_secure_sdk_sys = "1.1.0"
 ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split-take-2" }
-
-[patch."https://github.com/LedgerHQ/ledger-nanos-sdk.git".nanos_sdk]
-git = "https://github.com/alamgu/ledger-nanos-sdk.git"
-branch = "relocating-loader-w-fixes"
-[patch."https://github.com/LedgerHQ/ledger-nanos-ui.git".nanos_ui]
-git = "https://github.com/obsidiansystems/ledger-nanos-ui"
-branch = "dn-make-from-pub"

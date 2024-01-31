@@ -3,10 +3,10 @@ use arrayvec::ArrayString;
 use core::fmt::{Arguments, Error, Write};
 use core::str::from_utf8;
 
-use nanos_sdk::buttons::*;
-use nanos_ui::bagls::*;
-use nanos_ui::layout::*;
-use nanos_ui::ui::clear_screen;
+use ledger_device_sdk::buttons::*;
+use ledger_device_sdk::ui::bagls::*;
+use ledger_device_sdk::ui::layout::*;
+use ledger_device_sdk::ui::gadgets::{clear_screen, get_event};
 
 #[derive(Clone, Debug)]
 pub struct PromptQueue {
@@ -170,7 +170,7 @@ impl PromptQueue {
 
             // let buttons_evt = self.io.next_button().await;
             loop {
-                if let Some(buttons_evt) = nanos_ui::ui::get_event(&mut buttons) {
+                if let Some(buttons_evt) = get_event(&mut buttons) {
                     // {
                     match (state.clone(), buttons_evt) {
                         (PromptingState::Prompts, ButtonEvent::LeftButtonRelease) => {

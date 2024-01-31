@@ -84,14 +84,14 @@ use core::future::Future;
 use core::pin::Pin;
 use ledger_log::*;
 use ledger_parser_combinators::async_parser::{reject, Readable, UnwrappableReadable};
-use nanos_sdk::bindings::*;
-use nanos_sdk::io;
+use ledger_secure_sdk_sys::*;
+use ledger_device_sdk::io;
 
 use core::cell::{Ref, RefCell, RefMut};
 use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::task::*;
-use nanos_sdk::io::Reply; //, BorrowMutError};
+use ledger_device_sdk::io::Reply; //, BorrowMutError};
 
 pub mod prompts;
 
@@ -453,7 +453,7 @@ pub fn poll_with_trivial_context<Fut: Future + ?Sized>(
     f: Pin<&mut Fut>,
 ) -> core::task::Poll<Fut::Output> {
     let waker =
-        unsafe { Waker::from_raw(RawWaker::new(&(), nanos_sdk::pic_rs(&RAW_WAKER_VTABLE))) };
+        unsafe { Waker::from_raw(RawWaker::new(&(), pic_rs(&RAW_WAKER_VTABLE))) };
     let mut ctxd = Context::from_waker(&waker);
     let r = f.poll(&mut ctxd);
     core::mem::forget(ctxd);
@@ -469,7 +469,7 @@ fn sha256_hash(data: &[u8]) -> [u8; 32] {
         let mut hasher = cx_sha256_s::default();
         cx_sha256_init_no_throw(&mut hasher);
         let hasher_ref = &mut hasher as *mut cx_sha256_s as *mut cx_hash_t;
-        cx_hash_update(hasher_ref, data.as_ptr(), data.len() as u32);
+        cx_hash_update(hasher_ref, data.as_ptr(), data.len());
         cx_hash_final(hasher_ref, rv.as_mut_ptr());
     }
     rv
