@@ -83,9 +83,10 @@ use arrayvec::ArrayVec;
 use core::future::Future;
 use core::pin::Pin;
 use ledger_log::*;
-use ledger_parser_combinators::async_parser::{reject, Readable, UnwrappableReadable};
+use ledger_parser_combinators::async_parser::{reject, Readable, UnwrappableReadable, REJECTED_CODE};
 use ledger_secure_sdk_sys::*;
 use ledger_device_sdk::io;
+use ledger_device_sdk::io::SyscallError;
 
 use core::cell::{Ref, RefCell, RefMut};
 use core::convert::TryFrom;
@@ -114,7 +115,7 @@ impl TryFrom<u8> for HostToLedgerCmd {
             2 => Ok(HostToLedgerCmd::GetChunkResponseFailure),
             3 => Ok(HostToLedgerCmd::PutChunkResponse),
             4 => Ok(HostToLedgerCmd::ResultAccumulatingResponse),
-            _ => Err(io::StatusWords::Unknown.into()),
+            _ => Err(SyscallError::InvalidParameter.into()),
         }
     }
 }
@@ -228,10 +229,10 @@ impl HostIO {
     pub fn get_comm<'a>(self) -> Result<RefMut<'a, io::Comm>, Reply> {
         self.0
             .try_borrow_mut()
-            .or(Err(io::StatusWords::Unknown))?
+            .or(Err(SyscallError::InvalidState))?
             .comm
             .try_borrow_mut()
-            .or(Err(io::StatusWords::Unknown.into()))
+            .or(Err(SyscallError::InvalidState.into()))
     }
 
     /// Get a chunk, identified by SHA256 hash of it's contents, from the host.
@@ -329,7 +330,7 @@ impl HostIO {
                 params
                     .try_push(ByteStream {
                         host_io: self,
-                        current_chunk: param.try_into().or(Err(io::StatusWords::Unknown)).ok()?,
+                        current_chunk: param.try_into().or(Err(SyscallError::InvalidParameter)).ok()?,
                         current_offset: 0,
                     })
                     .ok()?;
@@ -384,15 +385,15 @@ impl ByteStream {
     fn get_current_block<'a>(&'a mut self) -> impl 'a + Future<Output = Ref<'static, Block>> {
         async move {
             if self.current_chunk == [0; 32] {
-                let _: () = reject().await;
+                let _: () = reject(SyscallError::InvalidParameter as u16).await;
             }
             let chunk_res = self.host_io.get_chunk(self.current_chunk).await;
             match chunk_res {
                 Ok(a) => match Ref::filter_map(a, Block::from_raw_slice_opt) {
                     Ok(r) => r,
-                    Err(_) => reject().await,
+                    Err(_) => reject(SyscallError::InvalidParameter as u16).await,
                 },
-                Err(_) => reject().await,
+                Err(_) => reject(SyscallError::InvalidParameter as u16).await,
             }
         }
     }
@@ -500,13 +501,13 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO,
                 s.set(Some(apdus(io, ins))); // Initialize the APDU represented.
                 Some(())
             })
-            .ok_or(io::StatusWords::Unknown)?;
+            .ok_or(SyscallError::InvalidState)?;
         }
         Ok(HostToLedgerCmd::GetChunkResponseSuccess)
             if io.0.borrow().sent_command == Some(LedgerToHostCmd::GetChunk) =>
         {
             if io.0.borrow().comm.borrow().get_data()?.len() < HASH_LEN + 1 {
-                return Err(io::StatusWords::Unknown.into());
+                return Err(SyscallError::InvalidParameter.into());
             }
 
             // Check the hash, so the host can't lie.
@@ -519,7 +520,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO,
                     Some(())
                 }
             })
-            .ok_or(io::StatusWords::Unknown)?;
+            .ok_or(Reply::from(SyscallError::InvalidParameter))?;
         }
         // Only need to check that these are responses to things we did; there's no data to
         // validate.
@@ -530,7 +531,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO,
         Ok(HostToLedgerCmd::ResultAccumulatingResponse)
             if io.0.borrow().sent_command == Some(LedgerToHostCmd::ResultAccumulating) => {}
         // Reject otherwise.
-        _ => Err(io::StatusWords::Unknown)?,
+        _ => Err(Reply::from(SyscallError::InvalidParameter))?,
     }
 
     // We use this to wait if we've already got a command to send, so clear it now that we're
@@ -539,7 +540,7 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO,
 
     loop {
         // And run the future for this APDU.
-        match poll_with_trivial_context(s.as_mut().as_pin_mut().ok_or(io::StatusWords::Unknown)?) {
+        match poll_with_trivial_context(s.as_mut().as_pin_mut().ok_or(Reply::from(SyscallError::InvalidState))?) {
             Poll::Pending => {
                 // Then, check that if we're waiting that we've actually given the host something to do.
                 // In case of ResultFinal allow the Future to run to completion, and reset the state.
@@ -549,13 +550,19 @@ pub fn poll_apdu_handlers<'a: 'b, 'b, F: Future<Output = ()>, Ins, A: Fn(HostIO,
                     return Ok(());
                 } else {
                     error!("APDU handler future neither completed nor sent a command; something is probably missing an .await");
-                    Err(io::StatusWords::Unknown)?
+                    unsafe {
+                        if REJECTED_CODE == 0 {
+                            Err(Reply::from(SyscallError::InvalidState))?
+                        } else {
+                            Err(Reply(REJECTED_CODE))?
+                        }
+                    }
                 }
             }
             Poll::Ready(()) => {
                 if io.0.borrow().sent_command.is_none() {
                     error!("APDU handler future completed but did not send a command; the last line is probably missing an .await");
-                    Err(io::StatusWords::Unknown)?
+                    Err(Reply::from(SyscallError::InvalidState))?
                 }
                 call_me_maybe(|| {
                     s.set(None);
