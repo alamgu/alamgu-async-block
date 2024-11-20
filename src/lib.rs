@@ -94,6 +94,7 @@ use core::convert::TryInto;
 use core::task::*;
 use ledger_device_sdk::io::Reply; //, BorrowMutError};
 
+#[cfg(feature = "prompts")]
 pub mod prompts;
 
 #[repr(u8)]

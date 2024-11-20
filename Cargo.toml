@@ -12,3 +12,7 @@ pin-project = "1.0.10"
 ledger_device_sdk = "1.4.3"
 ledger_secure_sdk_sys = "1.1.0"
 ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split-take-2" }
+
+[features]
+default = []
+prompts = []
