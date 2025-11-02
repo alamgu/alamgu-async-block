@@ -246,7 +246,8 @@ impl HostIO {
                 if s.sent_command.is_some() {
                     Poll::Pending
                 } else if s.requested_block == Some(sha) {
-                    match s.comm.borrow().get_data().ok().unwrap()[0].try_into() {
+                    let resp_code = s.comm.borrow().get_data().ok().unwrap()[0];
+                    match resp_code.try_into() {
                         Ok(HostToLedgerCmd::GetChunkResponseSuccess) => {
                             Poll::Ready(Ok(Ref::map(s.comm.borrow(), |comm| {
                                 &comm.get_data().ok().unwrap()[1..]
@@ -255,8 +256,12 @@ impl HostIO {
                         Ok(HostToLedgerCmd::GetChunkResponseFailure) => {
                             Poll::Ready(Err(ChunkNotFound))
                         }
+                        Ok(HostToLedgerCmd::START) => {
+                            error!("Start response code received when expecting GetChunkResponse");
+                            Poll::Ready(Err(ChunkNotFound))
+                        }
                         _ => {
-                            error!("Reached unreachable");
+                            error!("Reached unreachable, resp code: {:#}", resp_code);
                             panic!("Unreachable: should be filtered out by protocol rules before this point.")
                         }
                     }
