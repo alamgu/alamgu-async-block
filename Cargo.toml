@@ -7,10 +7,10 @@ edition = "2018"
 
 [dependencies]
 arrayvec = { version = "0.7.2", default-features = false }
-ledger-log = { git = "https://github.com/alamgu/ledger-log" }
+ledger-log = { git = "https://github.com/alamgu/ledger-log", branch = "y333/rust_sdk_single_crate" }
 pin-project = "1.0.10"
 ledger_device_sdk = { version = "1.28.0", features=["sys"] }
-ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split-take-2" }
+ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="y333/rust_sdk_single_crate" }
 
 [features]
 default = []
@@ -18,8 +18,3 @@ prompts = []
 
 [patch.crates-io]
 ledger_device_sdk = {git = "https://github.com/LedgerHQ/ledger-device-rust-sdk.git" }
-
-[patch."https://github.com/alamgu/ledger-log"]
-ledger-log = { path = "../../alamgu/ledger-log" }
-[patch."https://github.com/alamgu/ledger-parser-combinators"]
-ledger-parser-combinators = { path = "../../alamgu/ledger-parser-combinators" }
