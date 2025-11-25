@@ -9,8 +9,7 @@ edition = "2018"
 arrayvec = { version = "0.7.2", default-features = false }
 ledger-log = { git = "https://github.com/alamgu/ledger-log" }
 pin-project = "1.0.10"
-ledger_device_sdk = "1.4.3"
-ledger_secure_sdk_sys = "1.1.0"
+ledger_device_sdk = { version = "1.29.0", features=["sys"] }
 ledger-parser-combinators = { git = "https://github.com/alamgu/ledger-parser-combinators", branch="async-split-take-2" }
 
 [features]
